@@ -1,0 +1,36 @@
+{
+    "name": "jetty/client",
+    "description": "Jetty PHP client for the tunnel API (list, delete, share + heartbeats). Publish this tree as the jetty-client repository; require with Composer: jetty/client.",
+    "type": "library",
+    "license": "MIT",
+    "keywords": ["jetty", "tunnel", "cli", "api"],
+    "require": {
+        "php": "^8.2",
+        "ext-curl": "*",
+        "ext-json": "*"
+    },
+    "suggest": {
+        "ext-pcntl": "For clean Ctrl+C handling when running `jetty-php share`",
+        "ext-zlib": "Required to run the gzipped PHAR build (`composer run build-phar`)"
+    },
+    "bin": [
+        "bin/jetty-php"
+    ],
+    "autoload": {
+        "psr-4": {
+            "JettyCli\\": "src/"
+        }
+    },
+    "config": {
+        "sort-packages": true
+    },
+    "require-dev": {
+        "humbug/box": "^4.6"
+    },
+    "scripts": {
+        "build-phar": "box compile --no-interaction"
+    },
+    "replace": {
+        "jetty/php-cli": "*"
+    }
+}

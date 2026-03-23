@@ -1,0 +1,12 @@
+{
+    "$schema": "https://raw.githubusercontent.com/box-project/box/main/res/schema.json",
+    "alias": "jetty-php.phar",
+    "banner": [
+        "Jetty PHP client (jetty/client) — https://jetty.dev",
+        ""
+    ],
+    "chmod": "0755",
+    "compression": "GZ",
+    "main": "bin/jetty-php",
+    "output": "dist/jetty-php.phar"
+}
