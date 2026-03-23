@@ -51,7 +51,21 @@ composer run build-phar
 php dist/jetty-php.phar version
 ```
 
-Prebuilt **`jetty-php.phar`** may also be attached to **`cli-v*`** releases on the main Jetty app repository (see that repo’s GitHub Actions).
+Prebuilt **`jetty-php.phar`** is attached to **`cli-v*`** releases on the main Jetty app repository (GitHub Actions “Release CLI”). Download from **Releases**, not from the web app’s `public/` tree.
+
+### Update a PHAR in place
+
+Set **`JETTY_PHAR_RELEASES_REPO`** or **`JETTY_CLI_GITHUB_REPO`** to `owner/repo` (same repo you publish CLI releases to). Optional: **`JETTY_PHAR_GITHUB_TOKEN`** for private repos or rate limits.
+
+```bash
+export JETTY_CLI_GITHUB_REPO=your-org/jetty
+jetty-php version --check-update   # optional: query GitHub for newer cli-v* release
+jetty-php self-update --check      # show latest asset URL without installing
+jetty-php self-update              # download jetty-php.phar from latest release (semver > built-in VERSION)
+jetty-php self-update --force      # re-download even if semver matches
+```
+
+Bump **`ApiClient::VERSION`** in `src/ApiClient.php` when you tag a release so `self-update` can compare versions sensibly (release tags use `cli-v1.2.3` → compared as `1.2.3`).
 
 ## Requirements
 

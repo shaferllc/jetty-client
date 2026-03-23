@@ -22,7 +22,8 @@ final class Application
             $command = array_shift($rest);
 
             return match ($command) {
-                'version', '--version', '-V' => $this->cmdVersion(),
+                'version', '--version', '-V' => $this->cmdVersion($rest),
+                'self-update' => $this->cmdSelfUpdate($rest),
                 'list' => $this->cmdList($global),
                 'delete' => $this->cmdDelete($global, $rest),
                 'share', 'http' => $this->cmdShare($global, $rest),
@@ -117,11 +118,132 @@ final class Application
         return new ApiClient($cfg->apiUrl, $cfg->token);
     }
 
-    private function cmdVersion(): int
+    /**
+     * @param  list<string>  $args
+     */
+    private function cmdVersion(array $args): int
     {
         $this->stdout('jetty-php '.ApiClient::VERSION);
 
+        $pharPath = \Phar::running(false);
+        if ($pharPath !== '' && in_array('--check-update', $args, true)) {
+            $repo = $this->releasesRepo();
+            $token = $this->githubTokenForReleases();
+            if ($repo !== null) {
+                $latest = GitHubPharRelease::latest($repo, $token);
+                if ($latest !== null) {
+                    $remoteSemver = GitHubPharRelease::tagToSemver($latest['tag_name']);
+                    $cmp = version_compare($remoteSemver, ApiClient::VERSION);
+                    if ($cmp > 0) {
+                        $this->stdout('Update available: '.$latest['tag_name'].' (you have '.ApiClient::VERSION.') — run: jetty-php self-update');
+                    } else {
+                        $this->stdout('Up to date with latest release '.$latest['tag_name'].'.');
+                    }
+                }
+            }
+        }
+
         return 0;
+    }
+
+    /**
+     * @param  list<string>  $args
+     */
+    private function cmdSelfUpdate(array $args): int
+    {
+        $pharPath = \Phar::running(false);
+        if ($pharPath === '') {
+            throw new \InvalidArgumentException('self-update only works when jetty-php is run as a PHAR file.');
+        }
+
+        $checkOnly = in_array('--check', $args, true);
+        $force = in_array('--force', $args, true);
+
+        $repo = $this->releasesRepo();
+        if ($repo === null) {
+            throw new \InvalidArgumentException(
+                'Set JETTY_PHAR_RELEASES_REPO or JETTY_CLI_GITHUB_REPO to owner/repo (GitHub releases with jetty-php.phar).'
+            );
+        }
+
+        $token = $this->githubTokenForReleases();
+        $latest = GitHubPharRelease::latest($repo, $token);
+        if ($latest === null) {
+            throw new \RuntimeException('Could not find a release with jetty-php.phar on '.$repo.'.');
+        }
+
+        $remoteSemver = GitHubPharRelease::tagToSemver($latest['tag_name']);
+        $cmp = version_compare($remoteSemver, ApiClient::VERSION);
+
+        if ($checkOnly) {
+            $this->stdout('Current: '.ApiClient::VERSION);
+            $this->stdout('Latest release: '.$latest['tag_name'].' — '.$latest['html_url']);
+            $this->stdout('Download: '.$latest['browser_download_url']);
+            if ($cmp > 0) {
+                $this->stdout('A newer version is available. Run: jetty-php self-update');
+            } elseif ($cmp < 0) {
+                $this->stdout('This PHAR is newer than the latest GitHub release (unusual). Use --force to reinstall.');
+            } else {
+                $this->stdout('Semver matches the latest release.');
+            }
+
+            return 0;
+        }
+
+        if ($cmp <= 0 && ! $force) {
+            $this->stdout('Already at or past latest release '.$latest['tag_name'].'. Use --force to re-download.');
+
+            return 0;
+        }
+
+        $tmp = $pharPath.'.download.'.uniqid('', true);
+        try {
+            GitHubPharRelease::downloadFile($latest['browser_download_url'], $tmp, $token);
+        } catch (\Throwable $e) {
+            @unlink($tmp);
+            throw $e;
+        }
+
+        if (! is_file($tmp) || filesize($tmp) < 1024) {
+            @unlink($tmp);
+            throw new \RuntimeException('Downloaded file looks invalid (too small).');
+        }
+
+        @chmod($tmp, 0755);
+        if (! @rename($tmp, $pharPath)) {
+            @unlink($tmp);
+            throw new \RuntimeException(
+                'Could not replace '.$pharPath.'. Try: mv '.basename($tmp).' '.basename($pharPath).' (from the same directory), or run self-update from a shell outside the PHAR.'
+            );
+        }
+
+        $this->stderr('Updated to '.$latest['tag_name'].' ('.$remoteSemver.'). Run jetty-php version to confirm.');
+
+        return 0;
+    }
+
+    private function releasesRepo(): ?string
+    {
+        foreach (['JETTY_PHAR_RELEASES_REPO', 'JETTY_CLI_GITHUB_REPO'] as $key) {
+            $v = getenv($key);
+            if (is_string($v) && trim($v) !== '') {
+                return trim($v);
+            }
+        }
+
+        return null;
+    }
+
+    private function githubTokenForReleases(): ?string
+    {
+        foreach (['JETTY_PHAR_GITHUB_TOKEN', 'JETTY_CLI_GITHUB_TOKEN', 'GITHUB_TOKEN'] as $key) {
+            $v = getenv($key);
+            if (is_string($v) && trim($v) !== '') {
+                return trim($v);
+            }
+        }
+
+        return null;
     }
 
     private function cmdHelp(): int
@@ -451,12 +573,17 @@ Global flags:
   --token=TOKEN   Override token
 
 Commands:
-  jetty-php version
+  jetty-php version [--check-update]
+  jetty-php self-update [--check] [--force]
   jetty-php list
   jetty-php delete <id>
   jetty-php config set|get|clear ...
   jetty-php share <port> [--host=127.0.0.1] [--subdomain=label] [--print-url-only] [--skip-edge]
     (alias: http)
+
+PHAR updates: set JETTY_PHAR_RELEASES_REPO or JETTY_CLI_GITHUB_REPO=owner/repo (cli-v* releases with jetty-php.phar).
+  self-update --check   show latest release without installing
+  Optional token: JETTY_PHAR_GITHUB_TOKEN (private repos / rate limits)
 
 Install: composer require jetty/client  (binary: vendor/bin/jetty-php)
 
