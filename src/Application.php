@@ -123,7 +123,7 @@ final class Application
      */
     private function cmdVersion(array $args): int
     {
-        $this->stdout('jetty-php '.ApiClient::VERSION);
+        $this->stdout('jetty '.ApiClient::VERSION);
 
         $pharPath = \Phar::running(false);
         if ($pharPath !== '' && in_array('--check-update', $args, true)) {
@@ -135,7 +135,7 @@ final class Application
                     $remoteSemver = GitHubPharRelease::tagToSemver($latest['tag_name']);
                     $cmp = version_compare($remoteSemver, ApiClient::VERSION);
                     if ($cmp > 0) {
-                        $this->stdout('Update available: '.$latest['tag_name'].' (you have '.ApiClient::VERSION.') — run: jetty-php self-update');
+                        $this->stdout('Update available: '.$latest['tag_name'].' (you have '.ApiClient::VERSION.') — run: jetty self-update');
                     } else {
                         $this->stdout('Up to date with latest release '.$latest['tag_name'].'.');
                     }
@@ -153,7 +153,7 @@ final class Application
     {
         $pharPath = \Phar::running(false);
         if ($pharPath === '') {
-            throw new \InvalidArgumentException('self-update only works when jetty-php is run as a PHAR file.');
+            throw new \InvalidArgumentException('self-update only works when jetty is run as a PHAR file.');
         }
 
         $checkOnly = in_array('--check', $args, true);
@@ -180,7 +180,7 @@ final class Application
             $this->stdout('Latest release: '.$latest['tag_name'].' — '.$latest['html_url']);
             $this->stdout('Download: '.$latest['browser_download_url']);
             if ($cmp > 0) {
-                $this->stdout('A newer version is available. Run: jetty-php self-update');
+                $this->stdout('A newer version is available. Run: jetty self-update');
             } elseif ($cmp < 0) {
                 $this->stdout('This PHAR is newer than the latest GitHub release (unusual). Use --force to reinstall.');
             } else {
@@ -217,7 +217,7 @@ final class Application
             );
         }
 
-        $this->stderr('Updated to '.$latest['tag_name'].' ('.$remoteSemver.'). Run jetty-php version to confirm.');
+        $this->stderr('Updated to '.$latest['tag_name'].' ('.$remoteSemver.'). Run jetty version to confirm.');
 
         return 0;
     }
@@ -285,7 +285,7 @@ final class Application
     private function cmdDelete(array $global, array $args): int
     {
         if ($args === []) {
-            throw new \InvalidArgumentException('Usage: jetty-php delete <tunnel-id>');
+            throw new \InvalidArgumentException('Usage: jetty delete <tunnel-id>');
         }
         $id = (int) $args[0];
         if ($id < 1) {
@@ -308,7 +308,7 @@ final class Application
     private function cmdConfig(array $args): int
     {
         if ($args === []) {
-            throw new \InvalidArgumentException("Usage: jetty-php config set|get|clear ...\n".$this->helpText());
+            throw new \InvalidArgumentException("Usage: jetty config set|get|clear ...\n".$this->helpText());
         }
         $sub = array_shift($args);
 
@@ -326,7 +326,7 @@ final class Application
     private function cmdConfigSet(array $args): int
     {
         if (count($args) < 2) {
-            throw new \InvalidArgumentException('Usage: jetty-php config set <key> <value>  (keys: api-url, token, subdomain, domain)');
+            throw new \InvalidArgumentException('Usage: jetty config set <key> <value>  (keys: server, api-url, token, subdomain, domain)');
         }
         $key = $args[0];
         $value = $args[1];
@@ -350,7 +350,7 @@ final class Application
 
                 return 0;
             }
-            foreach (['api_url', 'token', 'subdomain', 'custom_domain'] as $k) {
+            foreach (['api_url', 'server', 'token', 'subdomain', 'custom_domain'] as $k) {
                 $this->printConfigLine($m, $k);
             }
 
@@ -368,7 +368,7 @@ final class Application
     private function cmdConfigClear(array $args): int
     {
         if ($args === []) {
-            throw new \InvalidArgumentException('Usage: jetty-php config clear <key|all>');
+            throw new \InvalidArgumentException('Usage: jetty config clear <key|all>');
         }
         $a = strtolower(trim($args[0]));
         if ($a === 'all') {
@@ -434,7 +434,7 @@ final class Application
         }
 
         if ($positional === []) {
-            throw new \InvalidArgumentException('Usage: jetty-php share <port> [--host=127.0.0.1] [--subdomain=label] [--print-url-only] [--skip-edge] (alias: http)');
+            throw new \InvalidArgumentException('Usage: jetty share <port> [--host=127.0.0.1] [--subdomain=label] [--print-url-only] [--skip-edge] (alias: http)');
         }
 
         $port = (int) $positional[0];
@@ -559,9 +559,9 @@ Config file (recommended): JSON. First file wins:
 Values in the file override JETTY_* env for keys that are set. CLI flags override everything.
 
 User config file (~/.config/jetty/config.json):
-  jetty-php config set api-url|token|subdomain|domain <value>
-  jetty-php config get [key]
-  jetty-php config clear <key|all>
+  jetty config set server|api-url|token|subdomain|domain <value>
+  jetty config get [key]
+  jetty config clear <key|all>
 
 Environment (optional fallback):
   JETTY_API_URL   Base URL (default http://127.0.0.1:8000)
@@ -573,19 +573,19 @@ Global flags:
   --token=TOKEN   Override token
 
 Commands:
-  jetty-php version [--check-update]
-  jetty-php self-update [--check] [--force]
-  jetty-php list
-  jetty-php delete <id>
-  jetty-php config set|get|clear ...
-  jetty-php share <port> [--host=127.0.0.1] [--subdomain=label] [--print-url-only] [--skip-edge]
+  jetty version [--check-update]
+  jetty self-update [--check] [--force]
+  jetty list
+  jetty delete <id>
+  jetty config set|get|clear ...
+  jetty share <port> [--host=127.0.0.1] [--subdomain=label] [--print-url-only] [--skip-edge]
     (alias: http)
 
 PHAR updates: set JETTY_PHAR_RELEASES_REPO or JETTY_CLI_GITHUB_REPO=owner/repo (cli-v* releases with jetty-php.phar).
   self-update --check   show latest release without installing
   Optional token: JETTY_PHAR_GITHUB_TOKEN (private repos / rate limits)
 
-Install: composer require jetty/client  (binary: vendor/bin/jetty-php)
+Install: composer require jetty/client  (binary: vendor/bin/jetty)
 
 TXT;
     }

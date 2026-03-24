@@ -1,8 +1,8 @@
 # jetty-client
 
-Composer package **`jetty/client`**: PHP CLI for the [Jetty](https://jetty.dev) tunnel API (`/api/tunnels`).
+Composer package **`jetty/client`**: PHP build of the **`jetty`** CLI for the [Jetty](https://jetty.dev) tunnel API (`/api/tunnels`).
 
-**Scope:** `list`, `delete`, `share` (alias `http`) — register tunnels and send heartbeats. This client does **not** run the edge WebSocket agent; use the Jetty Go CLI for that.
+**Scope:** `list`, `delete`, `share` (alias `http`) — register tunnels and send heartbeats. This client does **not** run the edge WebSocket agent; use the Jetty Go binary for that.
 
 ## Install
 
@@ -10,10 +10,10 @@ Composer package **`jetty/client`**: PHP CLI for the [Jetty](https://jetty.dev) 
 composer require jetty/client
 ```
 
-The binary is installed to **`vendor/bin/jetty-php`** (add `vendor/bin` to your PATH, or call it by full path).
+The binary is **`vendor/bin/jetty`** (add `vendor/bin` to your PATH, or call it by full path).
 
 ```bash
-vendor/bin/jetty-php version
+vendor/bin/jetty version
 ```
 
 ### Global install
@@ -21,12 +21,12 @@ vendor/bin/jetty-php version
 ```bash
 composer global require jetty/client
 # Ensure Composer’s global bin directory is on your PATH
-jetty-php version
+jetty version
 ```
 
 ## Configuration
 
-Prefer a **JSON config file** so you do not need shell exports. See `composer show jetty/client` or run `vendor/bin/jetty-php help` for paths (`~/.config/jetty/config.json`, `./jetty.config.json`, etc.).
+Prefer a **JSON config file** so you do not need shell exports. See `composer show jetty/client` or run `vendor/bin/jetty help` for paths (`~/.config/jetty/config.json`, `./jetty.config.json`, etc.).
 
 ```json
 {
@@ -35,7 +35,7 @@ Prefer a **JSON config file** so you do not need shell exports. See `composer sh
 }
 ```
 
-Optional fallbacks: `JETTY_API_URL`, `JETTY_TOKEN`, or flags `--api-url` / `--token`.
+Optional fallbacks: `JETTY_API_URL`, `JETTY_SERVER`, `JETTY_TOKEN`, or flags `--api-url` / `--token`.
 
 ## Split repository
 
@@ -43,14 +43,16 @@ This directory is intended to be the root of a **standalone Git repository** (e.
 
 ## PHAR
 
-**Hosted installer (Jetty web app):** if your deployment serves `https://your-app/install/jetty-php.sh`, you can install the latest release PHAR into `~/.local/bin/jetty-php` with:
+**Hosted installer (Jetty web app):** if your deployment serves `https://your-app/install/jetty.sh`, you can install the latest release PHAR as **`jetty`** in `~/.local/bin` with:
 
 ```bash
-curl -fsSL "https://your-app/install/jetty-php.sh" | bash -s -- --repo your-org/your-main-jetty-repo
+curl -fsSL "https://your-app/install/jetty.sh" | bash
 exec "$SHELL" -l
 ```
 
-Then `jetty-php config set api-url …`, `jetty-php config set token …`, `jetty-php share 8000`.
+(`install/jetty-php.sh` is an alias of the same script.)
+
+Then `jetty config set server …`, `jetty config set token …`, `jetty share 8000`.
 
 **Build locally:**
 
@@ -62,7 +64,7 @@ composer run build-phar
 php dist/jetty-php.phar version
 ```
 
-Prebuilt **`jetty-php.phar`** is attached to **`cli-v*`** releases on the main Jetty app repository (GitHub Actions “Release CLI”). Download from **Releases**, not from the web app’s `public/` tree.
+Prebuilt **`jetty-php.phar`** (Box output filename) is attached to **`cli-v*`** releases on the main Jetty app repository (GitHub Actions “Release CLI”). Download from **Releases**, not from the web app’s `public/` tree.
 
 ### Update a PHAR in place
 
@@ -70,10 +72,10 @@ Set **`JETTY_PHAR_RELEASES_REPO`** or **`JETTY_CLI_GITHUB_REPO`** to `owner/repo
 
 ```bash
 export JETTY_CLI_GITHUB_REPO=your-org/jetty
-jetty-php version --check-update   # optional: query GitHub for newer cli-v* release
-jetty-php self-update --check      # show latest asset URL without installing
-jetty-php self-update              # download jetty-php.phar from latest release (semver > built-in VERSION)
-jetty-php self-update --force      # re-download even if semver matches
+jetty version --check-update   # optional: query GitHub for newer cli-v* release
+jetty self-update --check      # show latest asset URL without installing
+jetty self-update              # download jetty-php.phar from latest release (semver > built-in VERSION)
+jetty self-update --force      # re-download even if semver matches
 ```
 
 Bump **`ApiClient::VERSION`** in `src/ApiClient.php` when you tag a release so `self-update` can compare versions sensibly (release tags use `cli-v1.2.3` → compared as `1.2.3`).
@@ -82,7 +84,7 @@ Bump **`ApiClient::VERSION`** in `src/ApiClient.php` when you tag a release so `
 
 - PHP 8.2+
 - Extensions: `curl`, `json`, `zlib` (for PHAR)
-- Optional: `pcntl` for reliable Ctrl+C during `jetty-php share`
+- Optional: `pcntl` for reliable Ctrl+C during `jetty share`
 
 ## Replacing `jetty/php-cli`
 

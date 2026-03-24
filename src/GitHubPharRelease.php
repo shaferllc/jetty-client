@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace JettyCli;
 
 /**
- * Finds the latest cli-v* / cli-auto-* GitHub release that ships jetty-php.phar (same rules as the Jetty app dashboard).
+ * Finds the latest cli-v* / cli-auto-* GitHub release that ships a Jetty PHAR (jetty.phar / jetty-php.phar; same rules as the Jetty app dashboard).
  */
 final class GitHubPharRelease
 {
@@ -67,7 +67,7 @@ final class GitHubPharRelease
         $headers = [
             'Accept: application/vnd.github+json',
             'X-GitHub-Api-Version: 2022-11-28',
-            'User-Agent: jetty-php/'.ApiClient::VERSION,
+            'User-Agent: jetty/'.ApiClient::VERSION,
         ];
         if (is_string($token) && $token !== '') {
             $headers[] = 'Authorization: Bearer '.$token;
@@ -140,12 +140,22 @@ final class GitHubPharRelease
      */
     private static function matchPharAsset(array $assets): ?string
     {
+        foreach (['jetty.phar', 'jetty-php.phar'] as $prefer) {
+            foreach ($assets as $asset) {
+                $name = isset($asset['name']) ? strtolower((string) $asset['name']) : '';
+                if ($name === $prefer) {
+                    $u = isset($asset['browser_download_url']) ? (string) $asset['browser_download_url'] : '';
+
+                    return $u !== '' ? $u : null;
+                }
+            }
+        }
         foreach ($assets as $asset) {
             $name = isset($asset['name']) ? strtolower((string) $asset['name']) : '';
-            if ($name === '') {
+            if ($name === '' || ! str_ends_with($name, '.phar')) {
                 continue;
             }
-            if (str_contains($name, 'jetty-php.phar') || str_contains($name, 'jetty-php')) {
+            if (str_contains($name, 'jetty')) {
                 $u = isset($asset['browser_download_url']) ? (string) $asset['browser_download_url'] : '';
 
                 return $u !== '' ? $u : null;
@@ -181,7 +191,7 @@ final class GitHubPharRelease
 
         $headers = [
             'Accept: application/octet-stream',
-            'User-Agent: jetty-php/'.ApiClient::VERSION,
+            'User-Agent: jetty/'.ApiClient::VERSION,
         ];
         if (is_string($githubToken) && $githubToken !== '') {
             $headers[] = 'Authorization: Bearer '.$githubToken;

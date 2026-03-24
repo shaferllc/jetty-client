@@ -23,9 +23,12 @@ final class Config
     public static function resolve(?string $configFileFlag = null): self
     {
         $envBase = getenv('JETTY_API_URL');
+        $envServer = getenv('JETTY_SERVER');
         $base = ($envBase !== false && trim((string) $envBase) !== '')
             ? rtrim(trim((string) $envBase), '/')
-            : 'http://127.0.0.1:8000';
+            : (($envServer !== false && trim((string) $envServer) !== '')
+                ? self::serverToUrl(trim((string) $envServer))
+                : 'http://127.0.0.1:8000');
         $token = trim((string) (getenv('JETTY_TOKEN') ?: ''));
 
         $defaultSubdomain = '';
@@ -37,6 +40,8 @@ final class Config
             if (is_array($data)) {
                 if (array_key_exists('api_url', $data) && is_string($data['api_url']) && trim($data['api_url']) !== '') {
                     $base = rtrim(trim($data['api_url']), '/');
+                } elseif (array_key_exists('server', $data) && is_string($data['server']) && trim($data['server']) !== '') {
+                    $base = self::serverToUrl(trim($data['server']));
                 }
                 if (array_key_exists('token', $data) && is_string($data['token'])) {
                     $token = trim($data['token']);
@@ -70,11 +75,26 @@ final class Config
     }
 
     /** @return non-empty-string */
+    private static function serverToUrl(string $s): string
+    {
+        $s = trim($s);
+        if ($s === '') {
+            return 'https://localhost';
+        }
+        if (str_starts_with($s, 'http://') || str_starts_with($s, 'https://')) {
+            return rtrim($s, '/');
+        }
+
+        return 'https://'.$s;
+    }
+
+    /** @return non-empty-string */
     public static function normalizeConfigCliKey(string $key): string
     {
         $k = strtolower(trim($key));
         $map = [
             'token' => 'token',
+            'server' => 'server',
             'api-url' => 'api_url',
             'api_url' => 'api_url',
             'subdomain' => 'subdomain',
@@ -83,7 +103,7 @@ final class Config
             'custom_domain' => 'custom_domain',
         ];
         if (! isset($map[$k])) {
-            throw new \InvalidArgumentException('Unknown config key: '.$key.' (use api-url, token, subdomain, domain)');
+            throw new \InvalidArgumentException('Unknown config key: '.$key.' (use server, api-url, token, subdomain, domain)');
         }
 
         return $map[$k];
@@ -166,7 +186,7 @@ final class Config
             return;
         }
         $current = self::readUserConfigMap();
-        foreach (['api_url', 'token', 'subdomain', 'custom_domain'] as $k) {
+        foreach (['api_url', 'server', 'token', 'subdomain', 'custom_domain'] as $k) {
             unset($current[$k]);
         }
         if ($current === []) {

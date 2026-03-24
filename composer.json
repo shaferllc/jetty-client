@@ -10,11 +10,11 @@
         "ext-json": "*"
     },
     "suggest": {
-        "ext-pcntl": "For clean Ctrl+C handling when running `jetty-php share`",
+        "ext-pcntl": "For clean Ctrl+C handling when running `jetty share`",
         "ext-zlib": "Required to run the gzipped PHAR build (`composer run build-phar`)"
     },
     "bin": [
-        "bin/jetty-php"
+        "bin/jetty"
     ],
     "autoload": {
         "psr-4": {
