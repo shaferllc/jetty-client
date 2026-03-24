@@ -19,7 +19,7 @@ final class GitHubPharRelease
             return null;
         }
 
-        $url = 'https://api.github.com/repos/'.$ownerRepo.'/releases?per_page=20';
+        $url = 'https://api.github.com/repos/'.$ownerRepo.'/releases?per_page=100';
         $json = self::httpGet($url, $githubToken);
         if ($json === null) {
             return null;
@@ -112,15 +112,32 @@ final class GitHubPharRelease
             return null;
         }
 
-        $cliV = array_values(array_filter($candidates, static function (array $r): bool {
-            $tag = isset($r['tag_name']) ? (string) $r['tag_name'] : '';
+        $withPhar = array_values(array_filter($candidates, static function (array $r): bool {
+            /** @var list<array<string, mixed>> $assets */
+            $assets = isset($r['assets']) && is_array($r['assets']) ? $r['assets'] : [];
 
-            return $tag !== '' && preg_match('/^cli-v/i', $tag) === 1;
+            return self::matchPharAsset($assets) !== null;
         }));
 
-        $pool = $cliV !== [] ? $cliV : $candidates;
+        $pool = $withPhar !== [] ? $withPhar : $candidates;
 
         usort($pool, static function (array $a, array $b): int {
+            /** @var list<array<string, mixed>> $aa */
+            $aa = isset($a['assets']) && is_array($a['assets']) ? $a['assets'] : [];
+            /** @var list<array<string, mixed>> $bb */
+            $bb = isset($b['assets']) && is_array($b['assets']) ? $b['assets'] : [];
+            $pharA = self::matchPharAsset($aa) !== null ? 0 : 1;
+            $pharB = self::matchPharAsset($bb) !== null ? 0 : 1;
+            if ($pharA !== $pharB) {
+                return $pharA <=> $pharB;
+            }
+            $tagA = isset($a['tag_name']) ? (string) $a['tag_name'] : '';
+            $tagB = isset($b['tag_name']) ? (string) $b['tag_name'] : '';
+            $cliVA = ($tagA !== '' && preg_match('/^cli-v/i', $tagA) === 1) ? 0 : 1;
+            $cliVB = ($tagB !== '' && preg_match('/^cli-v/i', $tagB) === 1) ? 0 : 1;
+            if ($cliVA !== $cliVB) {
+                return $cliVA <=> $cliVB;
+            }
             $preA = ! empty($a['prerelease']) ? 1 : 0;
             $preB = ! empty($b['prerelease']) ? 1 : 0;
             if ($preA !== $preB) {
