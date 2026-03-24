@@ -43,6 +43,17 @@ This directory is intended to be the root of a **standalone Git repository** (e.
 
 ## PHAR
 
+**Hosted installer (Jetty web app):** if your deployment serves `https://your-app/install/jetty-php.sh`, you can install the latest release PHAR into `~/.local/bin/jetty-php` with:
+
+```bash
+curl -fsSL "https://your-app/install/jetty-php.sh" | bash -s -- --repo your-org/your-main-jetty-repo
+exec "$SHELL" -l
+```
+
+Then `jetty-php config set api-url …`, `jetty-php config set token …`, `jetty-php share 8000`.
+
+**Build locally:**
+
 ```bash
 git clone https://github.com/yourorg/jetty-client.git
 cd jetty-client
