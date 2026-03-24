@@ -206,7 +206,7 @@ final class Config
     {
         if ($this->token === '') {
             throw new \InvalidArgumentException(
-                'Missing API token: add "token" to jetty.config.json (or ~/.config/jetty/config.json), set JETTY_TOKEN, or pass --token. Create a token in the Jetty dashboard.'
+                'Missing API token: run jetty onboard (or jetty setup), add "token" to ~/.config/jetty/config.json, set JETTY_TOKEN, or pass --token (Bridge → Tokens).'
             );
         }
         if ($this->apiUrl === '') {

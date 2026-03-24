@@ -14,6 +14,18 @@ final class Application
             [$global, $rest] = $this->parseGlobalFlags($argv);
 
             if ($rest === []) {
+                $cfg = $this->resolvedConfig($global);
+                if (trim($cfg->token) === '') {
+                    try {
+                        SetupWizard::runOnboarding($global['config']);
+                    } catch (\Throwable $e) {
+                        $this->stderr($e->getMessage());
+
+                        return 1;
+                    }
+
+                    return 0;
+                }
                 $this->stderr($this->helpText());
 
                 return 1;
@@ -27,7 +39,9 @@ final class Application
                 'list' => $this->cmdList($global),
                 'delete' => $this->cmdDelete($global, $rest),
                 'share', 'http' => $this->cmdShare($global, $rest),
-                'config' => $this->cmdConfig($rest),
+                'onboard' => $this->cmdOnboard($global, $rest),
+                'setup' => $this->cmdSetup($global, $rest),
+                'config' => $this->cmdConfig($global, $rest),
                 'help', '--help', '-h' => $this->cmdHelp(),
                 default => throw new \InvalidArgumentException('Unknown command: '.$command."\n".$this->helpText()),
             };
@@ -299,16 +313,53 @@ final class Application
     }
 
     /**
-     * @param  array{api-url: ?string, token: ?string}  $global
-     * @param  list<string>  $args
+     * @param  array{api-url: ?string, token: ?string, config: ?string}  $global
+     * @param  list<string>  $rest
      */
+    private function cmdOnboard(array $global, array $rest): int
+    {
+        if ($rest !== []) {
+            throw new \InvalidArgumentException("Usage: jetty onboard\n".$this->helpText());
+        }
+        try {
+            SetupWizard::runOnboarding($global['config']);
+        } catch (\Throwable $e) {
+            $this->stderr($e->getMessage());
+
+            return 1;
+        }
+
+        return 0;
+    }
+
     /**
+     * @param  array{api-url: ?string, token: ?string, config: ?string}  $global
+     * @param  list<string>  $rest
+     */
+    private function cmdSetup(array $global, array $rest): int
+    {
+        if ($rest !== []) {
+            throw new \InvalidArgumentException("Usage: jetty setup\n".$this->helpText());
+        }
+        try {
+            SetupWizard::runSetupMenu($global['config']);
+        } catch (\Throwable $e) {
+            $this->stderr($e->getMessage());
+
+            return 1;
+        }
+
+        return 0;
+    }
+
+    /**
+     * @param  array{api-url: ?string, token: ?string, config: ?string}  $global
      * @param  list<string>  $args
      */
-    private function cmdConfig(array $args): int
+    private function cmdConfig(array $global, array $args): int
     {
         if ($args === []) {
-            throw new \InvalidArgumentException("Usage: jetty config set|get|clear ...\n".$this->helpText());
+            throw new \InvalidArgumentException("Usage: jetty config set|get|clear|wizard ...\n".$this->helpText());
         }
         $sub = array_shift($args);
 
@@ -316,6 +367,7 @@ final class Application
             'set' => $this->cmdConfigSet($args),
             'get' => $this->cmdConfigGet($args),
             'clear' => $this->cmdConfigClear($args),
+            'wizard' => $this->cmdSetup($global, []),
             default => throw new \InvalidArgumentException('Unknown config subcommand: '.$sub."\n".$this->helpText()),
         };
     }
@@ -559,9 +611,13 @@ Config file (recommended): JSON. First file wins:
 Values in the file override JETTY_* env for keys that are set. CLI flags override everything.
 
 User config file (~/.config/jetty/config.json):
+  jetty                      First-run: runs setup when no token is configured (same as onboard)
+  jetty onboard              First-run: Bridge URL, pick server, paste token
+  jetty setup                Change settings (menu; same as jetty config wizard)
   jetty config set server|api-url|token|subdomain|domain <value>
   jetty config get [key]
   jetty config clear <key|all>
+  jetty config wizard        Alias for jetty setup
 
 Environment (optional fallback):
   JETTY_API_URL   Base URL (default http://127.0.0.1:8000)
@@ -575,9 +631,11 @@ Global flags:
 Commands:
   jetty version [--check-update]
   jetty self-update [--check] [--force]
+  jetty onboard              (see also: plain `jetty` when no token)
+  jetty setup
   jetty list
   jetty delete <id>
-  jetty config set|get|clear ...
+  jetty config set|get|clear|wizard ...
   jetty share <port> [--host=127.0.0.1] [--subdomain=label] [--print-url-only] [--skip-edge]
     (alias: http)
 
