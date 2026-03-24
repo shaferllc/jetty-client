@@ -68,9 +68,12 @@ Prebuilt **`jetty-php.phar`** (Box output filename) is attached to **`cli-v*`** 
 
 ### Update a PHAR in place
 
-Set **`JETTY_PHAR_RELEASES_REPO`** or **`JETTY_CLI_GITHUB_REPO`** to `owner/repo` (same repo you publish CLI releases to). Optional: **`JETTY_PHAR_GITHUB_TOKEN`** for private repos or rate limits.
+**Default:** `jetty self-update` uses GitHub **`shaferllc/jetty`** (same as `ApiClient::DEFAULT_PHAR_RELEASES_REPO`). No env vars required for the upstream project.
+
+**Forks / private releases:** set **`JETTY_PHAR_RELEASES_REPO`** or **`JETTY_CLI_GITHUB_REPO`** to `owner/repo`. Optional: **`JETTY_PHAR_GITHUB_TOKEN`** for private repos or rate limits.
 
 ```bash
+# only if your releases live somewhere other than shaferllc/jetty:
 export JETTY_CLI_GITHUB_REPO=your-org/jetty
 jetty version --check-update   # optional: query GitHub for newer cli-v* release
 jetty self-update --check      # show latest asset URL without installing

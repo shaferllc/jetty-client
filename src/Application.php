@@ -143,16 +143,14 @@ final class Application
         if ($pharPath !== '' && in_array('--check-update', $args, true)) {
             $repo = $this->releasesRepo();
             $token = $this->githubTokenForReleases();
-            if ($repo !== null) {
-                $latest = GitHubPharRelease::latest($repo, $token);
-                if ($latest !== null) {
-                    $remoteSemver = GitHubPharRelease::tagToSemver($latest['tag_name']);
-                    $cmp = version_compare($remoteSemver, ApiClient::VERSION);
-                    if ($cmp > 0) {
-                        $this->stdout('Update available: '.$latest['tag_name'].' (you have '.ApiClient::VERSION.') — run: jetty self-update');
-                    } else {
-                        $this->stdout('Up to date with latest release '.$latest['tag_name'].'.');
-                    }
+            $latest = GitHubPharRelease::latest($repo, $token);
+            if ($latest !== null) {
+                $remoteSemver = GitHubPharRelease::tagToSemver($latest['tag_name']);
+                $cmp = version_compare($remoteSemver, ApiClient::VERSION);
+                if ($cmp > 0) {
+                    $this->stdout('Update available: '.$latest['tag_name'].' (you have '.ApiClient::VERSION.') — run: jetty self-update');
+                } else {
+                    $this->stdout('Up to date with latest release '.$latest['tag_name'].'.');
                 }
             }
         }
@@ -174,12 +172,6 @@ final class Application
         $force = in_array('--force', $args, true);
 
         $repo = $this->releasesRepo();
-        if ($repo === null) {
-            throw new \InvalidArgumentException(
-                'Set JETTY_PHAR_RELEASES_REPO or JETTY_CLI_GITHUB_REPO to owner/repo (GitHub releases with jetty-php.phar).'
-            );
-        }
-
         $token = $this->githubTokenForReleases();
         $latest = GitHubPharRelease::latest($repo, $token);
         if ($latest === null) {
@@ -236,7 +228,7 @@ final class Application
         return 0;
     }
 
-    private function releasesRepo(): ?string
+    private function releasesRepo(): string
     {
         foreach (['JETTY_PHAR_RELEASES_REPO', 'JETTY_CLI_GITHUB_REPO'] as $key) {
             $v = getenv($key);
@@ -245,7 +237,7 @@ final class Application
             }
         }
 
-        return null;
+        return ApiClient::DEFAULT_PHAR_RELEASES_REPO;
     }
 
     private function githubTokenForReleases(): ?string
@@ -639,7 +631,7 @@ Commands:
   jetty share <port> [--host=127.0.0.1] [--subdomain=label] [--print-url-only] [--skip-edge]
     (alias: http)
 
-PHAR updates: set JETTY_PHAR_RELEASES_REPO or JETTY_CLI_GITHUB_REPO=owner/repo (cli-v* releases with jetty-php.phar).
+PHAR updates: default repo is GitHub shaferllc/jetty (cli-v* + jetty-php.phar). Override with JETTY_PHAR_RELEASES_REPO or JETTY_CLI_GITHUB_REPO=owner/repo for forks.
   self-update --check   show latest release without installing
   Optional token: JETTY_PHAR_GITHUB_TOKEN (private repos / rate limits)
 
