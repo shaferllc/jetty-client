@@ -66,22 +66,26 @@ php dist/jetty-php.phar version
 
 Prebuilt **`jetty-php.phar`** (Box output filename) is attached to **`cli-v*`** releases on the main Jetty app repository (GitHub Actions “Release CLI”). Download from **Releases**, not from the web app’s `public/` tree.
 
-### Update a PHAR in place
+### Update the CLI (`jetty update`)
 
-**Default:** `jetty self-update` uses GitHub **`shaferllc/jetty`** (same as `ApiClient::DEFAULT_PHAR_RELEASES_REPO`). No env vars required for the upstream project.
+**PHAR install:** `jetty update` downloads **`jetty-php.phar`** from the latest matching GitHub Release (same as before). **`jetty self-update`** is an alias.
 
-**Forks / private releases:** set **`JETTY_PHAR_RELEASES_REPO`** or **`JETTY_CLI_GITHUB_REPO`** to `owner/repo`. Optional: **`JETTY_PHAR_GITHUB_TOKEN`** for private repos or rate limits.
+**Composer install:** `jetty update` runs **`composer update jetty/client --no-interaction`** in the Composer project that owns the package (global or app). Requires **`composer`** on `PATH` or **`COMPOSER_BINARY`**. **`--check`** runs `composer outdated jetty/client` (or `composer show --self --latest` when you are developing this repo as the root package). **`--force`** adds **`--no-cache`** to Composer.
+
+**Default GitHub repo (PHAR path):** **`shaferllc/jetty`** (`ApiClient::DEFAULT_PHAR_RELEASES_REPO`). **Forks / private:** **`JETTY_PHAR_RELEASES_REPO`** or **`JETTY_CLI_GITHUB_REPO`**. Optional **`JETTY_PHAR_GITHUB_TOKEN`** for private repos or rate limits.
+
+**Local Jetty app (e.g. `jetty.test`):** set **`JETTY_LOCAL_PHAR_URL`** to your **`/install/jetty-local.phar`** URL (same as the curl installer). Then **`jetty update`** always re-downloads that PHAR—no GitHub semver gate—so each new build is picked up. Unset the variable to use GitHub releases again. Your **`~/.config/jetty/config.json`** is not touched by update; you only need **`jetty setup`** again if you want to change Bridge URL or token.
 
 ```bash
-# only if your releases live somewhere other than shaferllc/jetty:
+# PHAR — only if releases live somewhere other than shaferllc/jetty:
 export JETTY_CLI_GITHUB_REPO=your-org/jetty
-jetty version --check-update   # optional: query GitHub for newer cli-v* release
-jetty self-update --check      # show latest asset URL without installing
-jetty self-update              # download jetty-php.phar from latest release (semver > built-in VERSION)
-jetty self-update --force      # re-download even if semver matches
+jetty version --check-update   # optional: query GitHub for newer cli-v* release (PHAR only)
+jetty update --check           # PHAR: compare to GitHub; Composer: outdated / show --self
+jetty update                   # PHAR: replace file; Composer: composer update jetty/client
+jetty update --force           # PHAR: re-download; Composer: composer update --no-cache
 ```
 
-Bump **`ApiClient::VERSION`** in `src/ApiClient.php` when you tag a release so `self-update` can compare versions sensibly (release tags use `cli-v1.2.3` → compared as `1.2.3`).
+Bump **`ApiClient::VERSION`** in `src/ApiClient.php` when you tag a release so the PHAR update path can compare versions (release tags use `cli-v1.2.3` → compared as `1.2.3`).
 
 ## Requirements
 

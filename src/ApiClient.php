@@ -6,9 +6,9 @@ namespace JettyCli;
 
 final class ApiClient
 {
-    public const VERSION = '0.1.1';
+    public const VERSION = '0.1.4';
 
-    /** Default GitHub owner/repo for PHAR self-update when JETTY_*_REPO env is unset (matches Bridge config/jetty.php cli_github_repo). */
+    /** Default GitHub owner/repo for PHAR `jetty update` / `self-update` when JETTY_*_REPO env is unset (matches Bridge config/jetty.php cli_github_repo). */
     public const DEFAULT_PHAR_RELEASES_REPO = 'shaferllc/jetty';
 
     public function __construct(
@@ -19,11 +19,14 @@ final class ApiClient
     /**
      * @return array<string, mixed>
      */
-    public function createTunnel(string $localHost, int $localPort, ?string $subdomain = null): array
+    public function createTunnel(string $localHost, int $localPort, ?string $subdomain = null, ?string $tunnelServer = null): array
     {
         $body = ['local_host' => $localHost, 'local_port' => $localPort];
         if ($subdomain !== null && trim($subdomain) !== '') {
             $body['subdomain'] = trim($subdomain);
+        }
+        if ($tunnelServer !== null && trim($tunnelServer) !== '') {
+            $body['server'] = trim($tunnelServer);
         }
         $payload = json_encode($body, JSON_THROW_ON_ERROR);
         $res = $this->request('POST', '/api/tunnels', $payload);
@@ -106,12 +109,10 @@ final class ApiClient
         $responseBody = curl_exec($ch);
         if ($responseBody === false) {
             $err = curl_error($ch);
-            curl_close($ch);
             throw new \RuntimeException('HTTP request failed: '.$err);
         }
 
         $status = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        curl_close($ch);
 
         return ['status' => $status, 'body' => (string) $responseBody];
     }

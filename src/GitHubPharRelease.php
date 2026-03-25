@@ -81,7 +81,6 @@ final class GitHubPharRelease
 
         $body = curl_exec($ch);
         $code = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        curl_close($ch);
 
         if ($body === false || $code < 200 || $code >= 300) {
             return null;
@@ -202,7 +201,6 @@ final class GitHubPharRelease
 
         $out = fopen($destinationPath, 'wb');
         if ($out === false) {
-            curl_close($ch);
             throw new \RuntimeException('Cannot open '.$destinationPath.' for writing');
         }
 
@@ -223,7 +221,6 @@ final class GitHubPharRelease
 
         $ok = curl_exec($ch);
         $code = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        curl_close($ch);
         fclose($out);
 
         if ($ok === false || $code < 200 || $code >= 300) {

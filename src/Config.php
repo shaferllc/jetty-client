@@ -6,11 +6,16 @@ namespace JettyCli;
 
 final class Config
 {
+    /** Sentinel default when no Bridge URL is known (onboarding treats this like “unset”). */
+    public const PLACEHOLDER_API_URL = 'http://127.0.0.1:8000';
+
     public function __construct(
         public readonly string $apiUrl,
         public readonly string $token,
         public readonly string $defaultSubdomain = '',
         public readonly string $customDomain = '',
+        /** Tunnel placement / edge region (e.g. us-west-1). Not the Bridge "server" name used for api_url. */
+        public readonly string $defaultTunnelServer = '',
     ) {}
 
     /**
@@ -22,17 +27,16 @@ final class Config
      */
     public static function resolve(?string $configFileFlag = null): self
     {
-        $envBase = getenv('JETTY_API_URL');
-        $envServer = getenv('JETTY_SERVER');
-        $base = ($envBase !== false && trim((string) $envBase) !== '')
-            ? rtrim(trim((string) $envBase), '/')
-            : (($envServer !== false && trim((string) $envServer) !== '')
-                ? self::serverToUrl(trim((string) $envServer))
-                : 'http://127.0.0.1:8000');
+        $base = self::defaultApiBaseBeforeConfigFile();
         $token = trim((string) (getenv('JETTY_TOKEN') ?: ''));
 
         $defaultSubdomain = '';
         $customDomain = '';
+        $defaultTunnelServer = '';
+        $envTunnelServer = getenv('JETTY_TUNNEL_SERVER');
+        if ($envTunnelServer !== false && trim((string) $envTunnelServer) !== '') {
+            $defaultTunnelServer = trim((string) $envTunnelServer);
+        }
 
         $path = self::findConfigFilePath($configFileFlag);
         if ($path !== null) {
@@ -52,10 +56,13 @@ final class Config
                 if (array_key_exists('custom_domain', $data) && is_string($data['custom_domain'])) {
                     $customDomain = trim($data['custom_domain']);
                 }
+                if (array_key_exists('tunnel_server', $data) && is_string($data['tunnel_server']) && trim($data['tunnel_server']) !== '') {
+                    $defaultTunnelServer = trim($data['tunnel_server']);
+                }
             }
         }
 
-        return new self($base, $token, $defaultSubdomain, $customDomain);
+        return new self($base, $token, $defaultSubdomain, $customDomain, $defaultTunnelServer);
     }
 
     /**
@@ -71,7 +78,7 @@ final class Config
         $base = $apiUrlFlag !== null && $apiUrlFlag !== '' ? rtrim($apiUrlFlag, '/') : $this->apiUrl;
         $token = $tokenFlag !== null && $tokenFlag !== '' ? trim($tokenFlag) : $this->token;
 
-        return new self($base, $token, $this->defaultSubdomain, $this->customDomain);
+        return new self($base, $token, $this->defaultSubdomain, $this->customDomain, $this->defaultTunnelServer);
     }
 
     /** @return non-empty-string */
@@ -101,9 +108,11 @@ final class Config
             'domain' => 'custom_domain',
             'custom-domain' => 'custom_domain',
             'custom_domain' => 'custom_domain',
+            'tunnel-server' => 'tunnel_server',
+            'tunnel_server' => 'tunnel_server',
         ];
         if (! isset($map[$k])) {
-            throw new \InvalidArgumentException('Unknown config key: '.$key.' (use server, api-url, token, subdomain, domain)');
+            throw new \InvalidArgumentException('Unknown config key: '.$key.' (use server, api-url, token, subdomain, domain, tunnel-server)');
         }
 
         return $map[$k];
@@ -186,7 +195,7 @@ final class Config
             return;
         }
         $current = self::readUserConfigMap();
-        foreach (['api_url', 'server', 'token', 'subdomain', 'custom_domain'] as $k) {
+        foreach (['api_url', 'server', 'token', 'subdomain', 'custom_domain', 'tunnel_server'] as $k) {
             unset($current[$k]);
         }
         if ($current === []) {
@@ -199,6 +208,23 @@ final class Config
         $json = json_encode($current, JSON_THROW_ON_ERROR | JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
         if (file_put_contents($path, $json.\PHP_EOL) === false) {
             throw new \InvalidArgumentException('Cannot write: '.$path);
+        }
+    }
+
+    /**
+     * Clear all standard Jetty keys from ~/.config/jetty/config.json and remove ~/.jetty.json if present.
+     * Does not delete ./jetty.config.json or a file set via JETTY_CONFIG / --config (project or explicit paths).
+     */
+    public static function resetLocalUserConfig(): void
+    {
+        self::clearAllUserConfig();
+        $home = self::homeDirectory();
+        if ($home === null) {
+            return;
+        }
+        $legacy = $home.\DIRECTORY_SEPARATOR.'.jetty.json';
+        if (is_file($legacy)) {
+            @unlink($legacy);
         }
     }
 
@@ -262,6 +288,91 @@ final class Config
         }
 
         return is_array($data) ? $data : null;
+    }
+
+    /**
+     * Env-only defaults before merging JSON config. Uses JETTY_API_URL, JETTY_SERVER, installer-style
+     * JETTY_BRIDGE_URL / JETTY_ONBOARD_BRIDGE_URL, then APP_URL from a .env file found walking up from cwd.
+     */
+    private static function defaultApiBaseBeforeConfigFile(): string
+    {
+        $envBase = getenv('JETTY_API_URL');
+        if (is_string($envBase) && trim($envBase) !== '') {
+            return rtrim(trim($envBase), '/');
+        }
+        $envServer = getenv('JETTY_SERVER');
+        if (is_string($envServer) && trim($envServer) !== '') {
+            return self::serverToUrl(trim($envServer));
+        }
+        foreach (['JETTY_BRIDGE_URL', 'JETTY_ONBOARD_BRIDGE_URL'] as $key) {
+            $v = getenv($key);
+            if (is_string($v) && trim($v) !== '') {
+                return rtrim(trim($v), '/');
+            }
+        }
+        $fromDotEnv = self::appUrlFromEnvWalkingUp(getcwd());
+        if ($fromDotEnv !== null) {
+            return $fromDotEnv;
+        }
+
+        return self::PLACEHOLDER_API_URL;
+    }
+
+    /**
+     * APP_URL from a .env file found walking up from the current working directory (Jetty project root).
+     */
+    public static function appUrlFromNearestDotEnv(): ?string
+    {
+        return self::appUrlFromEnvWalkingUp(getcwd());
+    }
+
+    private static function appUrlFromEnvWalkingUp(string|false $startDir): ?string
+    {
+        if (! is_string($startDir) || $startDir === '') {
+            return null;
+        }
+        $dir = $startDir;
+        for ($depth = 0; $depth < 12; $depth++) {
+            $envFile = $dir.\DIRECTORY_SEPARATOR.'.env';
+            if (is_file($envFile) && is_readable($envFile)) {
+                $parsed = self::parseAppUrlFromEnvFile($envFile);
+                if ($parsed !== null) {
+                    return $parsed;
+                }
+            }
+            $parent = dirname($dir);
+            if ($parent === $dir) {
+                break;
+            }
+            $dir = $parent;
+        }
+
+        return null;
+    }
+
+    private static function parseAppUrlFromEnvFile(string $path): ?string
+    {
+        $raw = @file_get_contents($path);
+        if (! is_string($raw) || trim($raw) === '') {
+            return null;
+        }
+        if (! preg_match('/^\s*APP_URL\s*=\s*(.*)$/m', $raw, $m)) {
+            return null;
+        }
+        $u = trim($m[1]);
+        if ($u === '' || str_starts_with($u, '#')) {
+            return null;
+        }
+        if (! str_starts_with($u, '"') && ! str_starts_with($u, "'")) {
+            $u = preg_replace('/\s+#.*$/', '', $u) ?? $u;
+            $u = trim($u);
+        }
+        $u = trim($u, " \t\"'");
+        if ($u === '' || (! str_starts_with($u, 'http://') && ! str_starts_with($u, 'https://'))) {
+            return null;
+        }
+
+        return rtrim($u, '/');
     }
 
     private static function homeDirectory(): ?string

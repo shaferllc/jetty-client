@@ -6,8 +6,11 @@
     "keywords": ["jetty", "tunnel", "cli", "api"],
     "require": {
         "php": "^8.2",
+        "composer-runtime-api": "^2.2",
         "ext-curl": "*",
-        "ext-json": "*"
+        "ext-json": "*",
+        "ext-mbstring": "*",
+        "laravel/prompts": "^0.3"
     },
     "suggest": {
         "ext-pcntl": "For clean Ctrl+C handling when running `jetty share`",
