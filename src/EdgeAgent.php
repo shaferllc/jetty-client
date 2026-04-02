@@ -14,6 +14,9 @@ use function Amp\async;
 use function Amp\delay;
 use function Amp\Websocket\Client\connect;
 
+// Note: Revolt's EventLoop::run() accepts no callback — do not wrap the agent in EventLoop::run(fn () => …).
+// Use Amp\async(…)->await() so the WebSocket work actually runs on the event loop.
+
 /**
  * WebSocket tunnel agent: registers with jetty-edge and forwards http_request frames to local HTTP (same protocol as Go agent).
  */
@@ -57,7 +60,7 @@ final class EdgeAgent
             public EdgeAgentResult $result = EdgeAgentResult::FailedEarly;
         };
 
-        EventLoop::run(function () use ($wsUrl, $tunnelId, $agentToken, $localHost, $localPort, $apiClient, $heartbeatTunnelId, $stderr, $v, $box): void {
+        async(function () use ($wsUrl, $tunnelId, $agentToken, $localHost, $localPort, $apiClient, $heartbeatTunnelId, $stderr, $v, $verbose, $box): void {
             $state = new class
             {
                 public bool $running = true;
@@ -209,7 +212,7 @@ final class EdgeAgent
                 }
                 $v('EventLoop closure finished');
             }
-        });
+        })->await();
 
         return $box->result;
     }

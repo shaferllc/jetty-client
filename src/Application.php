@@ -1254,90 +1254,90 @@ final class Application
             }
 
             $this->stderr('Public URL:  '.$publicUrl);
-        $this->stderr('Local:       '.$localTarget);
-        if ($srvOut !== null) {
-            $this->stderr('Server:      '.$srvOut);
-        }
-        $this->stderr('Tunnel id:   '.$id);
-        $this->stderr('Status:      '.$status);
-        if ($ws !== '') {
-            $this->stderr('Edge WS:     '.$ws);
-        }
-
-        $suffix = $this->tunnelHostSuffix();
-        $this->stderr("\nTry HTTP via edge:\n  curl -H \"Host: {$subdomain}.{$suffix}\" http://127.0.0.1:8090/");
-        $this->stderr("(adjust :8090 if your ingress listens elsewhere)\n");
-
-        try {
-            $client->heartbeat($id);
-            if ($shareVerbose) {
-                $this->shareVerboseLog(true, 'initial heartbeat OK for tunnel id '.$id);
+            $this->stderr('Local:       '.$localTarget);
+            if ($srvOut !== null) {
+                $this->stderr('Server:      '.$srvOut);
             }
-        } catch (\Throwable $e) {
-            $this->stderr('warning: initial heartbeat: '.$e->getMessage());
-            if ($shareVerbose) {
-                $this->shareVerboseLog(true, 'initial heartbeat exception: '.$e->getMessage());
+            $this->stderr('Tunnel id:   '.$id);
+            $this->stderr('Status:      '.$status);
+            if ($ws !== '') {
+                $this->stderr('Edge WS:     '.$ws);
             }
-        }
 
-        $edgeOutcome = null;
-        if (! $printUrlOnly && ! $skipEdge && $ws !== '' && $agentToken !== '') {
+            $suffix = $this->tunnelHostSuffix();
+            $this->stderr("\nTry HTTP via edge:\n  curl -H \"Host: {$subdomain}.{$suffix}\" http://127.0.0.1:8090/");
+            $this->stderr("(adjust :8090 if your ingress listens elsewhere)\n");
+
             try {
-                $edgeOutcome = EdgeAgent::run(
-                    $ws,
-                    $id,
-                    $agentToken,
-                    $localHost,
-                    $port,
-                    $client,
-                    $id,
-                    fn (string $m) => $this->stderr($m),
-                    $shareVerbose,
-                );
-            } catch (\Throwable $e) {
-                $this->stderr('edge agent failed: '.$e->getMessage());
+                $client->heartbeat($id);
                 if ($shareVerbose) {
-                    $this->stderr('[jetty:share] '.get_class($e).' in '.$e->getFile().':'.$e->getLine());
-                    $this->stderr('[jetty:share] '.$e->getTraceAsString());
+                    $this->shareVerboseLog(true, 'initial heartbeat OK for tunnel id '.$id);
                 }
-                $this->stderr('Continuing with heartbeats only (no HTTP forwarding until you fix edge connectivity).');
-                $edgeOutcome = EdgeAgentResult::FailedEarly;
+            } catch (\Throwable $e) {
+                $this->stderr('warning: initial heartbeat: '.$e->getMessage());
+                if ($shareVerbose) {
+                    $this->shareVerboseLog(true, 'initial heartbeat exception: '.$e->getMessage());
+                }
             }
-        } elseif (! $printUrlOnly && ! $skipEdge && $ws === '') {
-            $this->stderr('Note: Bridge returned no edge WebSocket URL (JETTY_EDGE_WS_URL). Heartbeats only.');
-        } elseif (! $printUrlOnly && ! $skipEdge && $agentToken === '') {
-            $this->stderr('Note: no agent_token in API response — heartbeats only.');
-        }
 
-        $needsHeartbeatLoop = true;
-        if ($edgeOutcome === EdgeAgentResult::Finished) {
-            $needsHeartbeatLoop = false;
-            if ($shareVerbose) {
-                $this->shareVerboseLog(true, 'edge agent finished; skipping heartbeat fallback');
+            $edgeOutcome = null;
+            if (! $printUrlOnly && ! $skipEdge && $ws !== '' && $agentToken !== '') {
+                try {
+                    $edgeOutcome = EdgeAgent::run(
+                        $ws,
+                        $id,
+                        $agentToken,
+                        $localHost,
+                        $port,
+                        $client,
+                        $id,
+                        fn (string $m) => $this->stderr($m),
+                        $shareVerbose,
+                    );
+                } catch (\Throwable $e) {
+                    $this->stderr('edge agent failed: '.$e->getMessage());
+                    if ($shareVerbose) {
+                        $this->stderr('[jetty:share] '.get_class($e).' in '.$e->getFile().':'.$e->getLine());
+                        $this->stderr('[jetty:share] '.$e->getTraceAsString());
+                    }
+                    $this->stderr('Continuing with heartbeats only (no HTTP forwarding until you fix edge connectivity).');
+                    $edgeOutcome = EdgeAgentResult::FailedEarly;
+                }
+            } elseif (! $printUrlOnly && ! $skipEdge && $ws === '') {
+                $this->stderr('Note: Bridge returned no edge WebSocket URL (JETTY_EDGE_WS_URL). Heartbeats only.');
+            } elseif (! $printUrlOnly && ! $skipEdge && $agentToken === '') {
+                $this->stderr('Note: no agent_token in API response — heartbeats only.');
             }
-        } elseif ($edgeOutcome === EdgeAgentResult::FailedEarly) {
-            $this->stderr('');
-            $this->stderr('Edge WebSocket agent did not stay up; falling back to heartbeats only (tunnel stays registered).');
-            $this->stderr('Fix edge connectivity, or use --skip-edge for registration + heartbeats without the agent. Ctrl+C to exit and delete the tunnel.');
+
             $needsHeartbeatLoop = true;
-        }
-
-        if ($needsHeartbeatLoop) {
-            $this->runShareHeartbeatLoop($client, $id, $shareVerbose);
-        }
-
-        try {
-            if ($shareVerbose) {
-                $this->shareVerboseLog(true, 'DELETE /api/tunnels/'.$id);
+            if ($edgeOutcome === EdgeAgentResult::Finished) {
+                $needsHeartbeatLoop = false;
+                if ($shareVerbose) {
+                    $this->shareVerboseLog(true, 'edge agent finished; skipping heartbeat fallback');
+                }
+            } elseif ($edgeOutcome === EdgeAgentResult::FailedEarly) {
+                $this->stderr('');
+                $this->stderr('Edge WebSocket agent did not stay up; falling back to heartbeats only (tunnel stays registered).');
+                $this->stderr('Fix edge connectivity, or use --skip-edge for registration + heartbeats without the agent. Ctrl+C to exit and delete the tunnel.');
+                $needsHeartbeatLoop = true;
             }
-            $client->deleteTunnel($id);
-            $this->stderr("Tunnel {$id} deleted.\n");
-        } catch (\Throwable $e) {
-            $this->stderr('warning: could not delete tunnel '.$id.': '.$e->getMessage());
-            if ($shareVerbose) {
-                $this->stderr('[jetty:share] delete exception: '.$e->getTraceAsString());
+
+            if ($needsHeartbeatLoop) {
+                $this->runShareHeartbeatLoop($client, $id, $shareVerbose);
             }
-        }
+
+            try {
+                if ($shareVerbose) {
+                    $this->shareVerboseLog(true, 'DELETE /api/tunnels/'.$id);
+                }
+                $client->deleteTunnel($id);
+                $this->stderr("Tunnel {$id} deleted.\n");
+            } catch (\Throwable $e) {
+                $this->stderr('warning: could not delete tunnel '.$id.': '.$e->getMessage());
+                if ($shareVerbose) {
+                    $this->stderr('[jetty:share] delete exception: '.$e->getTraceAsString());
+                }
+            }
 
             return 0;
         } finally {
@@ -1604,7 +1604,7 @@ TXT;
             return $v;
         }
 
-        return 'tunnel.jetty.test';
+        return 'tunnel.usejetty.online';
     }
 
     private function helpText(): string
