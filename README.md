@@ -92,7 +92,7 @@ Prebuilt **`jetty-php.phar`** (Box output filename) is attached to **`cli-v*`** 
 
 **PHAR install:** `jetty update` downloads **`jetty-php.phar`** from the latest matching GitHub Release (same as before). **`jetty self-update`** is an alias.
 
-**Composer install:** `jetty update` runs **`composer update jetty/client --no-interaction`** in the Composer project that owns the package (global or app). Requires **`composer`** on `PATH` or **`COMPOSER_BINARY`**. **`--check`** runs `composer outdated jetty/client` (or `composer show --self --latest` when you are developing this repo as the root package). **`--force`** adds **`--no-cache`** to Composer.
+**Composer install:** `jetty update` runs **`composer update jetty/client --no-interaction`** in the Composer project that owns the package (global or app). Requires **`composer`** on `PATH` or **`COMPOSER_BINARY`**. **`--check`** runs `composer outdated jetty/client` (or `composer show --self --latest` when you are developing this repo as the root package). **`--force`** adds **`--no-cache`** and **`--with-all-dependencies`** to Composer (refreshes transitive deps, e.g. amphp).
 
 **Update global installs from a project copy:** **`jetty global-update`** runs **`composer global update jetty/client`** when `jetty/client` is installed globally, and/or refreshes a PHAR at **`~/.local/bin/jetty`** or **`JETTY_PHAR_PATH`**. Use **`--composer`** or **`--phar`** to update only one. Same **`--check`** / **`--force`** as `jetty update`.
 
@@ -106,7 +106,7 @@ export JETTY_CLI_GITHUB_REPO=your-org/jetty
 jetty version --check-update   # PHAR: GitHub; Composer: outdated / show --self (same as jetty update --check)
 jetty update --check           # PHAR: compare to GitHub; Composer: outdated / show --self
 jetty update                   # PHAR: replace file; Composer: composer update jetty/client
-jetty update --force           # PHAR: re-download; Composer: composer update --no-cache
+jetty update --force           # PHAR: re-download; Composer: composer update --no-cache --with-all-dependencies
 ```
 
 Bump **`ApiClient::VERSION`** in `src/ApiClient.php` when you tag a release so the PHAR update path can compare versions (release tags use `cli-v1.2.3` → compared as `1.2.3`).

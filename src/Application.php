@@ -443,6 +443,7 @@ final class Application
         $cmd = ['global', 'update', 'jetty/client', '--no-interaction'];
         if ($force) {
             $cmd[] = '--no-cache';
+            $cmd[] = '--with-all-dependencies';
         }
 
         $code = self::runComposerInDirectory($home, $composer, $cmd);
@@ -679,6 +680,7 @@ final class Application
         $cmd = ['update', 'jetty/client', '--no-interaction'];
         if ($force) {
             $cmd[] = '--no-cache';
+            $cmd[] = '--with-all-dependencies';
         }
 
         $code = self::runComposerInDirectory($root, $composer, $cmd);
@@ -694,23 +696,56 @@ final class Application
         return 0;
     }
 
+    /**
+     * Composer project root that owns {@see InstalledVersions} for jetty/client.
+     *
+     * Do not call realpath() on the package path before checking for vendor/jetty/client:
+     * path-repository and symlink installs resolve to the package source dir, so dirname(..,3)
+     * would point at the wrong tree and `composer update jetty/client` would not update the app lock.
+     */
     private static function composerProjectRootForJettyClient(): string
     {
         $raw = InstalledVersions::getInstallPath('jetty/client');
         if (! is_string($raw) || $raw === '') {
             throw new \RuntimeException('Could not resolve jetty/client install path.');
         }
-        $path = realpath($raw);
-        if ($path === false) {
+
+        $norm = str_replace('\\', '/', $raw);
+        if (str_ends_with($norm, '/vendor/jetty/client')) {
+            $root = dirname($raw, 3);
+            $resolved = realpath($root);
+
+            return $resolved !== false ? $resolved : $root;
+        }
+
+        $resolved = realpath($raw);
+        if ($resolved === false) {
             throw new \RuntimeException('jetty/client install path is not readable: '.$raw);
         }
 
-        $suffix = DIRECTORY_SEPARATOR.'vendor'.DIRECTORY_SEPARATOR.'jetty'.DIRECTORY_SEPARATOR.'client';
-        if (str_ends_with($path, $suffix)) {
-            return dirname($path, 3);
+        $normResolved = str_replace('\\', '/', $resolved);
+        if (str_ends_with($normResolved, '/vendor/jetty/client')) {
+            $root = dirname($resolved, 3);
+            $rootReal = realpath($root);
+
+            return $rootReal !== false ? $rootReal : $root;
         }
 
-        return $path;
+        $dir = $resolved;
+        for ($i = 0; $i < 24; $i++) {
+            if (is_file($dir.\DIRECTORY_SEPARATOR.'composer.json')) {
+                return $dir;
+            }
+            $parent = dirname($dir);
+            if ($parent === $dir) {
+                break;
+            }
+            $dir = $parent;
+        }
+
+        throw new \RuntimeException(
+            'Could not resolve Composer project root for jetty/client (install path: '.$raw.').'
+        );
     }
 
     private static function resolveComposerBinary(): string
