@@ -38,6 +38,7 @@ final class Application
             return match ($command) {
                 'version', '--version', '-V' => $this->cmdVersion($rest),
                 'update', 'self-update' => $this->cmdSelfUpdate($rest),
+                'install-client' => $this->cmdInstallClient($rest),
                 'list' => $this->cmdList($global),
                 'delete' => $this->cmdDelete($global, $rest),
                 'share', 'http' => $this->cmdShare($global, $rest),
@@ -171,25 +172,138 @@ final class Application
             return 0;
         }
 
+        $wantInstall = in_array('--install', $args, true);
+        $checkUpdate = in_array('--check-update', $args, true);
+
         $this->stdout('jetty '.ApiClient::VERSION);
 
-        $pharPath = \Phar::running(false);
-        if ($pharPath !== '' && in_array('--check-update', $args, true)) {
-            $repo = $this->releasesRepo();
-            $token = $this->githubTokenForReleases();
-            $latest = GitHubPharRelease::latest($repo, $token);
-            if ($latest !== null) {
-                $remoteSemver = GitHubPharRelease::tagToSemver($latest['tag_name']);
-                $cmp = version_compare($remoteSemver, ApiClient::VERSION);
-                if ($cmp > 0) {
-                    $this->stdout('Update available: '.$latest['tag_name'].' (you have '.ApiClient::VERSION.') — run: jetty update');
-                } else {
-                    $this->stdout('Up to date with latest release '.$latest['tag_name'].'.');
+        if ($wantInstall) {
+            $this->stdout('');
+            $this->stdout($this->versionInstallDetails());
+        }
+
+        if ($checkUpdate) {
+            if ($wantInstall) {
+                $this->stdout('');
+            }
+            $pharPath = \Phar::running(false);
+            if ($pharPath !== '') {
+                $repo = $this->releasesRepo();
+                $token = $this->githubTokenForReleases();
+                $latest = GitHubPharRelease::latest($repo, $token);
+                if ($latest !== null) {
+                    $remoteSemver = GitHubPharRelease::tagToSemver($latest['tag_name']);
+                    $cmp = version_compare($remoteSemver, ApiClient::VERSION);
+                    if ($cmp > 0) {
+                        $this->stdout('Update available: '.$latest['tag_name'].' (you have '.ApiClient::VERSION.') — run: jetty update');
+                    } else {
+                        $this->stdout('Up to date with latest release '.$latest['tag_name'].'.');
+                    }
                 }
+            } elseif (class_exists(InstalledVersions::class) && InstalledVersions::isInstalled('jetty/client')) {
+                return $this->updateComposerJettyClient(['--check']);
+            } else {
+                $this->stderr('--check-update applies to PHAR installs (GitHub) or Composer installs (Packagist).');
             }
         }
 
         return 0;
+    }
+
+    private function versionInstallDetails(): string
+    {
+        $pharPath = \Phar::running(false);
+        if ($pharPath !== '') {
+            $lines = [
+                'Install: PHAR',
+                '  Path:    '.$pharPath,
+                '  Update:  jetty update   (re-downloads from GitHub cli-v* for '.$this->releasesRepo().')',
+                '',
+                'Config is shared: ~/.config/jetty/config.json applies no matter how you installed the binary.',
+            ];
+            $multi = $this->detectMultipleJettyBinariesOnPath();
+            if ($multi !== null) {
+                $lines[] = '';
+                $lines[] = 'Multiple `jetty` executables on PATH — you only maintain the one you actually run:';
+                foreach ($multi as $p) {
+                    $lines[] = '  '.$p;
+                }
+            }
+
+            return implode("\n", $lines);
+        }
+
+        if (class_exists(InstalledVersions::class) && InstalledVersions::isInstalled('jetty/client')) {
+            try {
+                $root = self::composerProjectRootForJettyClient();
+            } catch (\Throwable) {
+                return 'Install: Composer (jetty/client) — could not resolve project root.';
+            }
+            $rootPkg = InstalledVersions::getRootPackage()['name'] ?? '';
+            if ($rootPkg === 'jetty/client') {
+                $kind = 'Composer (this repo / jetty-client dev checkout)';
+            } elseif ($this->isComposerGlobalProjectRoot($root)) {
+                $kind = 'Composer global (~/.composer or ~/.config/composer)';
+            } else {
+                $kind = 'Composer project dependency';
+            }
+
+            $lines = [
+                'Install: '.$kind,
+                '  Project root: '.$root,
+                '  Update:       jetty update   (runs composer update jetty/client in that directory)',
+                '',
+                'PHAR releases and Packagist use the same version from one GitHub “Release CLI” workflow —',
+                'you do not bump them separately. Pick one binary (PHAR or Composer) for daily use;',
+                '`jetty update` only upgrades the install that is running.',
+            ];
+            $multi = $this->detectMultipleJettyBinariesOnPath();
+            if ($multi !== null) {
+                $lines[] = '';
+                $lines[] = 'Multiple `jetty` executables on PATH:';
+                foreach ($multi as $p) {
+                    $lines[] = '  '.$p;
+                }
+            }
+
+            return implode("\n", $lines);
+        }
+
+        return 'Install: unknown (not a PHAR and jetty/client not in Composer metadata).';
+    }
+
+    private function isComposerGlobalProjectRoot(string $root): bool
+    {
+        $home = getenv('HOME') ?: getenv('USERPROFILE');
+        if (! is_string($home) || $home === '') {
+            return false;
+        }
+        $norm = str_replace('\\', '/', $root);
+        $h = str_replace('\\', '/', $home);
+
+        return str_contains($norm, $h.'/.composer/')
+            || str_contains($norm, $h.'/.config/composer/');
+    }
+
+    /**
+     * @return list<string>|null
+     */
+    private function detectMultipleJettyBinariesOnPath(): ?array
+    {
+        if (\PHP_OS_FAMILY === 'Windows') {
+            $out = [];
+            @exec('where.exe jetty 2>NUL', $out, $code);
+        } else {
+            $out = [];
+            @exec('which -a jetty 2>/dev/null', $out, $code);
+        }
+        if ($code !== 0 || $out === []) {
+            return null;
+        }
+        $paths = array_values(array_unique(array_map('trim', $out)));
+        $paths = array_values(array_filter($paths, fn (string $p) => $p !== ''));
+
+        return count($paths) > 1 ? $paths : null;
     }
 
     /**
@@ -203,6 +317,45 @@ final class Application
         }
 
         return $this->updateComposerJettyClient($args);
+    }
+
+    /**
+     * Add jetty/client to the Composer project in the current working directory (e.g. from a global `jetty` install).
+     *
+     * @param  list<string>  $args
+     */
+    private function cmdInstallClient(array $args): int
+    {
+        if ($args !== []) {
+            throw new \InvalidArgumentException('Usage: jetty install-client');
+        }
+        $cwd = getcwd();
+        if ($cwd === false) {
+            throw new \RuntimeException('Could not determine the current working directory.');
+        }
+        $composerJson = $cwd.\DIRECTORY_SEPARATOR.'composer.json';
+        if (! is_file($composerJson)) {
+            throw new \RuntimeException(
+                'No composer.json in '.$cwd.'. `cd` to your app root first, or run: composer require jetty/client'
+            );
+        }
+
+        $composer = self::resolveComposerBinary();
+        $code = self::runComposerInDirectory($cwd, $composer, ['require', 'jetty/client', '--no-interaction']);
+        if ($code !== 0) {
+            throw new \RuntimeException(
+                'composer require jetty/client failed (exit '.$code.'). Run it manually from: '.$cwd
+            );
+        }
+
+        $bin = $cwd.\DIRECTORY_SEPARATOR.'vendor'.\DIRECTORY_SEPARATOR.'bin'.\DIRECTORY_SEPARATOR.'jetty';
+        $hint = is_file($bin)
+            ? 'Project binary: '.$bin
+            : 'Use '.$cwd.\DIRECTORY_SEPARATOR.'vendor'.\DIRECTORY_SEPARATOR.'bin'.\DIRECTORY_SEPARATOR.'jetty (add vendor/bin to PATH).';
+
+        $this->stdout('Installed jetty/client into '.$cwd.'. '.$hint);
+
+        return 0;
     }
 
     /**
@@ -1048,8 +1201,11 @@ Global flags:
   --region=CODE   Regional Bridge (https://{region}.usejetty.online); default https://usejetty.online
 
 Commands:
-  jetty version [--machine] [--check-update]   --machine: print semver only (for scripts)
+  jetty version [--machine] [--install] [--check-update]
+    --machine: semver only (scripts)  --install: how this binary was installed + update hint
+    --check-update: PHAR→GitHub; Composer→Packagist (same as jetty update --check)
   jetty update [--check] [--force]   PHAR or Composer: refresh jetty/client (alias: self-update)
+  jetty install-client       composer require jetty/client in the current project (useful with a global jetty on PATH)
   jetty onboard              (see also: plain `jetty` when no token)
   jetty setup
   jetty help [--advanced|-a]   This help; --advanced lists config file & environment variables
@@ -1062,7 +1218,9 @@ Commands:
     (alias: http)  Omit port to auto-pick a responding dev port (8000, 3000, 5173, …) or default 8000
     --server= tunnel/edge id; default from config.  --site= / --host= upstream host (default 127.0.0.1)
 
-Install: composer require jetty/client  (binary: vendor/bin/jetty)
+Install: composer require jetty/client  (or: composer global require jetty/client — put Composer’s global vendor/bin on PATH)
+  Same config (~/.config/jetty/config.json) for PHAR and Composer. Releases: one “Release CLI” workflow ships the PHAR on GitHub and the same version to Packagist — bump once, not twice.
+  Day to day: pick one binary (PHAR or Composer); jetty update only upgrades the copy you run (see jetty version --install).
 
 TXT;
     }

@@ -20,9 +20,29 @@ vendor/bin/jetty version
 
 ```bash
 composer global require jetty/client
-# Ensure Composer’s global bin directory is on your PATH
+# Put Composer’s global vendor/bin on your PATH (e.g. ~/.composer/vendor/bin or ~/.config/composer/vendor/bin)
 jetty version
 ```
+
+The `bin/jetty` launcher resolves **`vendor/autoload.php`** from the Composer project root, so the same package works as a **project dependency** or a **global** install.
+
+### Add the client to a project (from a global `jetty`)
+
+If you already have `jetty` on your PATH from `composer global require`, `cd` to an app that has a `composer.json` and run:
+
+```bash
+jetty install-client
+```
+
+That runs `composer require jetty/client` in the current directory so you get **`vendor/bin/jetty`** there too (optional; you can keep using the global binary).
+
+### Updating: PHAR, Packagist, and “three installs”
+
+You do **not** need to track three separate release processes:
+
+- **Maintainers:** In this monorepo, **Actions → Release CLI** builds **`jetty-php.phar`**, attaches it to a **`cli-v*`** GitHub Release, and (when configured) **git subtree push** + tag **`vX.Y.Z`** to the **`jetty-client`** mirror so **Packagist** gets the same **`jetty/client`** version. Bump **`ApiClient::VERSION`** and **`composer.json`** `version` in `jetty-client/` together when you cut a release.
+- **Users:** Use **one** primary binary — PHAR in `~/.local/bin`, **or** Composer global, **or** `vendor/bin/jetty` in a project. Your config file is shared (`~/.config/jetty/config.json`). **`jetty update`** only updates **whichever install is running** (PHAR → GitHub release asset; Composer → `composer update jetty/client` in that project root).
+- **Inspect:** `jetty version --install` shows how this binary was installed and what `jetty update` will do. `jetty version --check-update` checks GitHub (PHAR) or Packagist via Composer (project/global).
 
 ## Configuration
 
@@ -79,7 +99,7 @@ Prebuilt **`jetty-php.phar`** (Box output filename) is attached to **`cli-v*`** 
 ```bash
 # PHAR — only if releases live somewhere other than shaferllc/jetty:
 export JETTY_CLI_GITHUB_REPO=your-org/jetty
-jetty version --check-update   # optional: query GitHub for newer cli-v* release (PHAR only)
+jetty version --check-update   # PHAR: GitHub; Composer: outdated / show --self (same as jetty update --check)
 jetty update --check           # PHAR: compare to GitHub; Composer: outdated / show --self
 jetty update                   # PHAR: replace file; Composer: composer update jetty/client
 jetty update --force           # PHAR: re-download; Composer: composer update --no-cache

@@ -3,9 +3,34 @@
 
 declare(strict_types=1);
 
-$autoload = dirname(__DIR__).'/vendor/autoload.php';
-if (! is_file($autoload)) {
-    fwrite(STDERR, "Run `composer install` in the jetty-client directory, or install with: composer require jetty/client\n");
+/**
+ * Resolve vendor/autoload.php whether this package is the Composer project root,
+ * a dependency (project/vendor/jetty/client), a global Composer install, or a PHAR.
+ */
+$autoload = null;
+$dir = dirname(__DIR__);
+for ($i = 0; $i < 32; $i++) {
+    $candidate = $dir.\DIRECTORY_SEPARATOR.'vendor'.\DIRECTORY_SEPARATOR.'autoload.php';
+    if (\is_file($candidate)) {
+        $autoload = $candidate;
+
+        break;
+    }
+    $parent = dirname($dir);
+    if ($parent === $dir) {
+        break;
+    }
+    $dir = $parent;
+}
+
+if ($autoload === null) {
+    fwrite(
+        \STDERR,
+        "Could not find Composer autoload (vendor/autoload.php).\n"
+        ."Install with: composer global require jetty/client\n"
+        ."Or in a project: composer require jetty/client\n"
+        ."Or from a global jetty: jetty install-client (in a directory with composer.json)\n"
+    );
     exit(1);
 }
 
