@@ -4,21 +4,17 @@ declare(strict_types=1);
 
 namespace JettyCli;
 
-use function Laravel\Prompts\select;
-
 /**
- * Onboarding: find a Bridge that serves GET /api/cli/bootstrap, then browser login and server pick (Prompts).
+ * Onboarding: find a Bridge that serves GET /api/cli/bootstrap, then browser login and auto-pick server.
  *
- * Bridge URL candidates (first success wins): JETTY_ONBOARD_BRIDGE_URL / JETTY_BRIDGE_URL, APP_URL from
- * nearest .env (cwd), JETTY_CLI_LOCAL_URL, saved api_url, then JETTY_CLI_BOOTSTRAP_FALLBACKS. That way a
- * stale production api_url in ~/.config/jetty/config.json does not block local dev when you run onboard
- * from a Jetty checkout.
+ * Defaults to https://usejetty.online (or https://{region}.usejetty.online with --region / JETTY_REGION).
+ * Localhost Bridge URLs are skipped unless JETTY_ALLOW_LOCAL_BRIDGE=1.
  */
 final class SetupWizard
 {
-    public static function runOnboarding(?string $configFlag): void
+    public static function runOnboarding(?string $configFlag, ?string $region = null): void
     {
-        self::runBridgeAndServer(Config::resolve($configFlag), true, $configFlag);
+        self::runBridgeAndServer(Config::resolve($configFlag, $region), true, $configFlag, $region);
     }
 
     public static function runSetupMenu(?string $configFlag): void
@@ -38,7 +34,7 @@ final class SetupWizard
             }
             $line = trim($line);
             if ($line === '' || $line === '1') {
-                self::runBridgeAndServer(Config::resolve($configFlag), false, $configFlag);
+                self::runBridgeAndServer(Config::resolve($configFlag), false, $configFlag, null);
 
                 return;
             }
@@ -88,7 +84,7 @@ final class SetupWizard
         if ($tok === '') {
             if (trim($start->token) === '') {
                 $base = rtrim(Config::resolve($configFlag)->apiUrl, '/');
-                if ($base === '' || $base === Config::PLACEHOLDER_API_URL) {
+                if ($base === '') {
                     throw new \InvalidArgumentException('Pick a server first (option 1), or paste a token.');
                 }
                 self::out('Browser sign-in…');
@@ -104,13 +100,12 @@ final class SetupWizard
         Config::writeUserConfigMerged(['token' => $tok]);
     }
 
-    private static function runBridgeAndServer(Config $start, bool $requireToken, ?string $configFlag): void
+    private static function runBridgeAndServer(Config $start, bool $requireToken, ?string $configFlag, ?string $region): void
     {
-        $candidates = self::bootstrapBridgeCandidates($start);
+        $candidates = self::bootstrapBridgeCandidates($start, $region);
         if ($candidates === []) {
             throw new \InvalidArgumentException(
-                'Cannot load servers: set JETTY_BRIDGE_URL, run from a Jetty checkout (APP_URL in .env), '.
-                'or set api_url in ~/.config/jetty/config.json.'
+                'Cannot load servers: set JETTY_BRIDGE_URL or JETTY_ALLOW_LOCAL_BRIDGE=1 for a local Bridge.'
             );
         }
         $boot = self::tryResolveBootstrapFromCandidates($candidates);
@@ -119,46 +114,36 @@ final class SetupWizard
             foreach ($candidates as $u) {
                 self::out('  • '.$u);
             }
-            self::out('Common cause: saved api_url points at production (old deploy or wrong app) while you mean local, or the reverse.');
-            self::out('Try: cd to your Jetty repo (APP_URL is tried before saved api_url), or:');
-            self::out('  export JETTY_BRIDGE_URL=https://jetty.test');
-            self::out('  export JETTY_CLI_BOOTSTRAP_FALLBACKS=https://your-production.example   # optional extra URLs to try');
-            self::out('  jetty config clear api-url');
-            self::outRaw('Enter API base URL manually (Bridge root — local e.g. https://jetty.test, or production): ');
-            $line2 = self::readLine();
-            if ($line2 === false) {
-                throw new \InvalidArgumentException('cancelled');
-            }
-            $apiBase = rtrim(trim($line2), '/');
-            if ($apiBase === '') {
-                throw new \InvalidArgumentException('API base URL is required');
-            }
-            if (! str_starts_with($apiBase, 'http://') && ! str_starts_with($apiBase, 'https://')) {
-                $apiBase = 'https://'.$apiBase;
-            }
-            self::persistApiChoice($apiBase);
-            self::promptAndSaveToken(Config::resolve($configFlag), $requireToken, $configFlag);
+            self::out('Try: export JETTY_BRIDGE_URL=https://usejetty.online   # or your self-hosted Bridge');
+            self::out('     jetty config clear api-url');
+            self::out('Self-hosted dev: JETTY_ALLOW_LOCAL_BRIDGE=1 to allow http://127.0.0.1 / localhost in saved api_url.');
 
-            return;
+            throw new \InvalidArgumentException('No reachable Bridge for onboarding.');
         }
-        self::pickServerFromBootstrapAndPersist($boot);
-        $apiRoot = rtrim(Config::resolve($configFlag)->apiUrl, '/');
+        self::pickServerFromBootstrapAndPersist($boot, $region);
+        $apiRoot = rtrim(Config::resolve($configFlag, $region)->apiUrl, '/');
+        self::out('');
+        self::out('Using Bridge API: '.$apiRoot);
         if ($requireToken) {
-            self::browserLoginFirstIfNeeded($apiRoot, $configFlag);
+            self::browserLoginFirstIfNeeded($apiRoot, $configFlag, $region);
         }
         if ($requireToken) {
-            if (trim(Config::resolve($configFlag)->token) === '') {
-                self::promptAndSaveToken(Config::resolve($configFlag), true, $configFlag);
+            if (trim(Config::resolve($configFlag, $region)->token) === '') {
+                self::promptAndSaveToken(Config::resolve($configFlag, $region), true, $configFlag, $region);
+            } else {
+                self::out('API token already saved — skipping sign-in.');
             }
         } else {
-            self::promptAndSaveToken(Config::resolve($configFlag), false, $configFlag);
+            self::promptAndSaveToken(Config::resolve($configFlag, $region), false, $configFlag, $region);
         }
+        self::out('');
+        self::out('Onboarding finished. Try: jetty list');
     }
 
     /**
      * First-run: save token from JETTY_ONBOARD_TOKEN, or open browser against Bridge (unless JETTY_ONBOARD_USE_BROWSER=0).
      */
-    private static function browserLoginFirstIfNeeded(string $bridgeBase, ?string $configFlag): void
+    private static function browserLoginFirstIfNeeded(string $bridgeBase, ?string $configFlag, ?string $region): void
     {
         $fromEnv = self::trimmedEnv('JETTY_ONBOARD_TOKEN');
         if ($fromEnv !== null && $fromEnv !== '') {
@@ -166,7 +151,7 @@ final class SetupWizard
 
             return;
         }
-        if (trim(Config::resolve($configFlag)->token) !== '') {
+        if (trim(Config::resolve($configFlag, $region)->token) !== '') {
             return;
         }
         if (self::envIsFalsy('JETTY_ONBOARD_USE_BROWSER')) {
@@ -178,18 +163,22 @@ final class SetupWizard
     }
 
     /**
-     * Ordered Bridge roots to try for GET /api/cli/bootstrap (deduped). Local checkout (.env APP_URL)
-     * is tried before saved ~/.config api_url so prod entries do not break local onboarding.
+     * Ordered Bridge roots to try for GET /api/cli/bootstrap (deduped).
+     * Defaults include https://usejetty.online (or regional). Localhost URLs are skipped unless
+     * JETTY_ALLOW_LOCAL_BRIDGE=1.
      *
      * @return list<string>
      */
-    private static function bootstrapBridgeCandidates(Config $start): array
+    private static function bootstrapBridgeCandidates(Config $start, ?string $region): array
     {
         $seen = [];
         $out = [];
         $add = function (string $u) use (&$seen, &$out): void {
             $u = trim($u);
-            if ($u === '' || $u === Config::PLACEHOLDER_API_URL) {
+            if ($u === '') {
+                return;
+            }
+            if (DefaultBridge::isProbablyLocalBridge($u) && ! DefaultBridge::allowLocalBridgeCandidates()) {
                 return;
             }
             try {
@@ -211,10 +200,13 @@ final class SetupWizard
                 $add($v);
             }
         }
-        $dot = Config::appUrlFromNearestDotEnv();
-        if ($dot !== null) {
-            $add($dot);
+
+        $r = $region !== null ? trim($region) : '';
+        if ($r === '' && is_string(getenv('JETTY_REGION')) && trim((string) getenv('JETTY_REGION')) !== '') {
+            $r = trim((string) getenv('JETTY_REGION'));
         }
+        $add(DefaultBridge::baseUrl($r !== '' ? $r : null));
+
         foreach (['JETTY_CLI_LOCAL_URL', 'JETTY_CLI_DEV_URL'] as $k) {
             $v = getenv($k);
             if (is_string($v) && trim($v) !== '') {
@@ -222,7 +214,7 @@ final class SetupWizard
             }
         }
         $api = trim($start->apiUrl);
-        if ($api !== '' && $api !== Config::PLACEHOLDER_API_URL) {
+        if ($api !== '') {
             $add($api);
         }
         $fb = getenv('JETTY_CLI_BOOTSTRAP_FALLBACKS');
@@ -254,8 +246,9 @@ final class SetupWizard
 
     /**
      * Apply server choice from bootstrap (sets api_url) before browser login so OAuth/token match the selected Bridge.
+     * Auto-selects: exact URL match for regional default, or name match, or first usejetty.online row, else first row.
      */
-    private static function pickServerFromBootstrapAndPersist(array $boot): void
+    private static function pickServerFromBootstrapAndPersist(array $boot, ?string $region): void
     {
         $servers = $boot['servers'] ?? [];
         /** @var list<array{name: string, url: string}> $clean */
@@ -275,30 +268,50 @@ final class SetupWizard
             throw new \InvalidArgumentException('Bridge returned no servers (check jetty.cli_servers / JETTY_CLI_SERVERS)');
         }
 
-        $autoServer = self::envIsTruthy('JETTY_ONBOARD_AUTO_SERVER');
-        if ($autoServer) {
-            $sel = $clean[0];
-        } else {
-            $options = [];
-            foreach ($clean as $i => $row) {
-                $options[$i + 1] = $row['name'].' — '.$row['url'];
-            }
-            $picked = select(
-                label: 'Server for this CLI',
-                options: $options,
-                default: 1,
-            );
-            $idx = (int) $picked;
-            if ($idx < 1 || $idx > count($clean)) {
-                throw new \InvalidArgumentException('invalid server choice');
-            }
-            $sel = $clean[$idx - 1];
-        }
-
+        $sel = self::autoPickServerRow($clean, $region);
+        self::out('Server for this CLI: '.$sel['name'].' — '.$sel['url']);
         self::persistServerChoice($sel['name'], $sel['url']);
     }
 
-    private static function promptAndSaveToken(Config $start, bool $requireToken, ?string $configFlag): void
+    /**
+     * @param  list<array{name: string, url: string}>  $clean
+     * @return array{name: string, url: string}
+     */
+    private static function autoPickServerRow(array $clean, ?string $region): array
+    {
+        if (count($clean) === 1) {
+            return $clean[0];
+        }
+
+        $r = $region !== null ? trim($region) : '';
+        if ($r === '' && is_string(getenv('JETTY_REGION')) && trim((string) getenv('JETTY_REGION')) !== '') {
+            $r = trim((string) getenv('JETTY_REGION'));
+        }
+
+        $wantUrl = DefaultBridge::baseUrl($r !== '' ? $r : null);
+        foreach ($clean as $row) {
+            if (rtrim($row['url'], '/') === $wantUrl) {
+                return $row;
+            }
+        }
+        if ($r !== '') {
+            $rl = strtolower($r);
+            foreach ($clean as $row) {
+                if (strtolower($row['name']) === $rl) {
+                    return $row;
+                }
+            }
+        }
+        foreach ($clean as $row) {
+            if (str_contains(strtolower($row['url']), 'usejetty.online')) {
+                return $row;
+            }
+        }
+
+        return $clean[0];
+    }
+
+    private static function promptAndSaveToken(Config $start, bool $requireToken, ?string $configFlag, ?string $region = null): void
     {
         $existing = trim($start->token);
         $fromEnv = self::trimmedEnv('JETTY_ONBOARD_TOKEN');
@@ -308,7 +321,7 @@ final class SetupWizard
             return;
         }
 
-        $base = rtrim(Config::resolve($configFlag)->apiUrl, '/');
+        $base = rtrim(Config::resolve($configFlag, $region)->apiUrl, '/');
         $hint = '(required — paste token or press Enter for browser)';
         if (! $requireToken && $existing !== '') {
             $hint = '['.self::maskToken($existing).' to keep, or Enter for browser]';
@@ -326,7 +339,7 @@ final class SetupWizard
 
                 return;
             }
-            if ($base === '' || $base === Config::PLACEHOLDER_API_URL) {
+            if ($base === '') {
                 throw new \InvalidArgumentException('Paste a token, or pick a server first (jetty onboard / jetty setup).');
             }
             self::out('Browser sign-in…');
@@ -344,19 +357,6 @@ final class SetupWizard
         $v = trim($v);
 
         return $v === '' ? null : $v;
-    }
-
-    private static function envIsTruthy(string $name): bool
-    {
-        $v = getenv($name);
-        if (! is_string($v)) {
-            return false;
-        }
-
-        return match (strtolower(trim($v))) {
-            '1', 'true', 'yes', 'on' => true,
-            default => false,
-        };
     }
 
     private static function envIsFalsy(string $name): bool

@@ -4,14 +4,14 @@
     "type": "library",
     "license": "MIT",
     "keywords": ["jetty", "tunnel", "cli", "api"],
+    "version": "0.1.6",
     "require": {
         "php": "^8.2",
         "ext-curl": "*",
         "ext-json": "*",
         "ext-mbstring": "*",
         "composer-runtime-api": "^2.2",
-        "amphp/websocket-client": "^2.0",
-        "laravel/prompts": "^0.3"
+        "amphp/websocket-client": "^2.0"
     },
     "suggest": {
         "ext-openssl": "For `wss://` edge WebSocket URLs (`jetty share`)",

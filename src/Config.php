@@ -7,7 +7,7 @@ namespace JettyCli;
 final class Config
 {
     /** Sentinel default when no Bridge URL is known (onboarding treats this like “unset”). */
-    public const PLACEHOLDER_API_URL = 'http://127.0.0.1:8000';
+    public const PLACEHOLDER_API_URL = 'https://usejetty.online';
 
     public function __construct(
         public readonly string $apiUrl,
@@ -25,9 +25,9 @@ final class Config
      * JSON search order (first readable file wins): --config path, JETTY_CONFIG,
      * ~/.config/jetty/config.json, ~/.jetty.json, ./jetty.config.json (cwd).
      */
-    public static function resolve(?string $configFileFlag = null): self
+    public static function resolve(?string $configFileFlag = null, ?string $cliRegion = null): self
     {
-        $base = self::defaultApiBaseBeforeConfigFile();
+        $base = self::defaultApiBaseBeforeConfigFile($cliRegion);
         $token = trim((string) (getenv('JETTY_TOKEN') ?: ''));
 
         $defaultSubdomain = '';
@@ -294,7 +294,7 @@ final class Config
      * Env-only defaults before merging JSON config. Uses JETTY_API_URL, JETTY_SERVER, installer-style
      * JETTY_BRIDGE_URL / JETTY_ONBOARD_BRIDGE_URL, then APP_URL from a .env file found walking up from cwd.
      */
-    private static function defaultApiBaseBeforeConfigFile(): string
+    private static function defaultApiBaseBeforeConfigFile(?string $cliRegion): string
     {
         $envBase = getenv('JETTY_API_URL');
         if (is_string($envBase) && trim($envBase) !== '') {
@@ -310,12 +310,16 @@ final class Config
                 return rtrim(trim($v), '/');
             }
         }
-        $fromDotEnv = self::appUrlFromEnvWalkingUp(getcwd());
-        if ($fromDotEnv !== null) {
-            return $fromDotEnv;
+
+        $region = $cliRegion;
+        if ($region === null || trim($region) === '') {
+            $envRegion = getenv('JETTY_REGION');
+            if (is_string($envRegion) && trim($envRegion) !== '') {
+                $region = trim($envRegion);
+            }
         }
 
-        return self::PLACEHOLDER_API_URL;
+        return DefaultBridge::baseUrl($region !== null && $region !== '' ? $region : null);
     }
 
     /**

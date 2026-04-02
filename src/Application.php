@@ -19,7 +19,7 @@ final class Application
                 $cfg = $this->resolvedConfig($global);
                 if (trim($cfg->token) === '') {
                     try {
-                        SetupWizard::runOnboarding($global['config']);
+                        SetupWizard::runOnboarding($global['config'], $global['region'] ?? null);
                     } catch (\Throwable $e) {
                         $this->stderr($e->getMessage());
 
@@ -59,13 +59,14 @@ final class Application
     }
 
     /**
-     * @return array{0: array{api-url: ?string, token: ?string, config: ?string}, 1: list<string>}
+     * @return array{0: array{api-url: ?string, token: ?string, config: ?string, region: ?string}, 1: list<string>}
      */
     private function parseGlobalFlags(array $argv): array
     {
         $apiUrl = null;
         $token = null;
         $config = null;
+        $region = null;
         $rest = [];
         $n = count($argv);
 
@@ -113,22 +114,43 @@ final class Application
 
                 continue;
             }
+            if (str_starts_with($arg, '--region=')) {
+                $r = substr($arg, strlen('--region='));
+                if (trim($r) !== '') {
+                    DefaultBridge::normalizeRegion($r);
+                    $region = trim($r);
+                }
+
+                continue;
+            }
+            if ($arg === '--region') {
+                $r = $argv[++$i] ?? throw new \InvalidArgumentException('--region requires a value');
+                if ($r === '' || str_starts_with($r, '--')) {
+                    throw new \InvalidArgumentException('--region requires a value');
+                }
+                DefaultBridge::normalizeRegion($r);
+                $region = $r;
+
+                continue;
+            }
             $rest[] = $arg;
         }
 
-        return [['api-url' => $apiUrl, 'token' => $token, 'config' => $config], $rest];
+        $region = is_string($region) && trim($region) !== '' ? trim($region) : null;
+
+        return [['api-url' => $apiUrl, 'token' => $token, 'config' => $config, 'region' => $region], $rest];
     }
 
     /**
-     * @param  array{api-url: ?string, token: ?string, config: ?string}  $global
+     * @param  array{api-url: ?string, token: ?string, config: ?string, region: ?string}  $global
      */
     private function resolvedConfig(array $global): Config
     {
-        return Config::resolve($global['config'])->merge($global['api-url'], $global['token']);
+        return Config::resolve($global['config'], $global['region'] ?? null)->merge($global['api-url'], $global['token']);
     }
 
     /**
-     * @param  array{api-url: ?string, token: ?string, config: ?string}  $global
+     * @param  array{api-url: ?string, token: ?string, config: ?string, region: ?string}  $global
      */
     private function client(array $global): ApiClient
     {
@@ -457,7 +479,7 @@ final class Application
     }
 
     /**
-     * @param  array{api-url: ?string, token: ?string}  $global
+     * @param  array{api-url: ?string, token: ?string, config: ?string, region: ?string}  $global
      */
     private function cmdList(array $global): int
     {
@@ -482,7 +504,7 @@ final class Application
     }
 
     /**
-     * @param  array{api-url: ?string, token: ?string}  $global
+     * @param  array{api-url: ?string, token: ?string, config: ?string, region: ?string}  $global
      * @param  list<string>  $args
      */
     private function cmdDelete(array $global, array $args): int
@@ -502,7 +524,7 @@ final class Application
     }
 
     /**
-     * @param  array{api-url: ?string, token: ?string, config: ?string}  $global
+     * @param  array{api-url: ?string, token: ?string, config: ?string, region: ?string}  $global
      * @param  list<string>  $rest
      */
     private function cmdOnboard(array $global, array $rest): int
@@ -511,7 +533,7 @@ final class Application
             throw new \InvalidArgumentException("Usage: jetty onboard\n".$this->helpText());
         }
         try {
-            SetupWizard::runOnboarding($global['config']);
+            SetupWizard::runOnboarding($global['config'], $global['region'] ?? null);
         } catch (\Throwable $e) {
             $this->stderr($e->getMessage());
 
@@ -522,7 +544,7 @@ final class Application
     }
 
     /**
-     * @param  array{api-url: ?string, token: ?string, config: ?string}  $global
+     * @param  array{api-url: ?string, token: ?string, config: ?string, region: ?string}  $global
      * @param  list<string>  $rest
      */
     private function cmdSetup(array $global, array $rest): int
@@ -541,10 +563,6 @@ final class Application
         return 0;
     }
 
-    /**
-     * @param  array{api-url: ?string, token: ?string, config: ?string}  $global
-     * @param  list<string>  $args
-     */
     /**
      * @param  list<string>  $rest
      */
@@ -982,7 +1000,7 @@ Values in the file override JETTY_* env for keys that are set. CLI flags overrid
 
 User config file (~/.config/jetty/config.json):
   jetty                      First-run: runs setup when no token is configured (same as onboard)
-  jetty onboard              First-run: browser login, then pick server (api_url)
+  jetty onboard [--region=eu]   First-run: browser login; auto-picks server (default Bridge https://usejetty.online)
   jetty setup                Change settings (menu; same as jetty config wizard)
   jetty config set server|api-url|token|subdomain|domain|tunnel-server <value>
   jetty config get [key]
@@ -993,10 +1011,11 @@ User config file (~/.config/jetty/config.json):
 
 Environment (optional fallback):
   JETTY_API_URL   Base URL for API calls (highest precedence)
-  JETTY_BRIDGE_URL, JETTY_ONBOARD_BRIDGE_URL   Bridge root when JETTY_API_URL unset (e.g. curl install sets onboard URL once)
-  JETTY_CLI_LOCAL_URL, JETTY_CLI_DEV_URL       Optional; tried when locating /api/cli/bootstrap (before saved api_url)
-  JETTY_CLI_BOOTSTRAP_FALLBACKS                Comma-separated extra Bridge roots to try if earlier URLs fail (e.g. production)
-  (If none of the above: APP_URL is read from a .env file by walking up from the current directory, else http://127.0.0.1:8000)
+  JETTY_REGION, --region=   Regional Bridge host: https://{region}.usejetty.online (default: https://usejetty.online)
+  JETTY_BRIDGE_URL, JETTY_ONBOARD_BRIDGE_URL   Override Bridge root when JETTY_API_URL unset
+  JETTY_ALLOW_LOCAL_BRIDGE=1   Allow localhost/127.0.0.1 in saved api_url and bootstrap candidates (self-hosted dev)
+  JETTY_CLI_LOCAL_URL, JETTY_CLI_DEV_URL       Optional extra bootstrap URLs
+  JETTY_CLI_BOOTSTRAP_FALLBACKS                Comma-separated extra Bridge roots to try
   JETTY_TOKEN     Personal access token from the dashboard
   JETTY_TUNNEL_SERVER   Default tunnel/edge id for jetty share (e.g. us-west-1)
   JETTY_LOCAL_PHAR_URL   If set (https?…), PHAR jetty update downloads from this URL every time (local Jetty app / dev); unset to use GitHub again
