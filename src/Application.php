@@ -681,6 +681,7 @@ final class Application
         $localHost = '127.0.0.1';
         $tunnelServerFlag = null;
         $printUrlOnly = false;
+        $skipEdge = false;
         $subdomain = null;
 
         $positional = [];
@@ -734,13 +735,15 @@ final class Application
                 continue;
             }
             if ($arg === '--skip-edge') {
+                $skipEdge = true;
+
                 continue;
             }
             $positional[] = $arg;
         }
 
         if (count($positional) > 1) {
-            throw new \InvalidArgumentException('Usage: jetty share [port] [--server=us-west-1] [--site=127.0.0.1] [--subdomain=label] [--print-url-only] [--skip-edge] (alias: http)');
+            throw new \InvalidArgumentException('Usage: jetty share [port] [--server=us-west-1] [--site=127.0.0.1] [--subdomain=label] [--print-url-only] [--skip-edge] (alias: http)  --skip-edge: register + heartbeats only, no WebSocket agent');
         }
 
         $explicitPort = null;
@@ -785,6 +788,7 @@ final class Application
         $edge = is_array($data['edge'] ?? null) ? $data['edge'] : [];
         $ws = (string) ($edge['websocket_url'] ?? '');
         $srvOut = isset($data['server']) && is_string($data['server']) && $data['server'] !== '' ? $data['server'] : null;
+        $agentToken = (string) ($data['agent_token'] ?? '');
 
         if ($printUrlOnly) {
             $this->stdout($publicUrl);
@@ -805,8 +809,7 @@ final class Application
 
         $suffix = $this->tunnelHostSuffix();
         $this->stderr("\nTry HTTP via edge:\n  curl -H \"Host: {$subdomain}.{$suffix}\" http://127.0.0.1:8090/");
-        $this->stderr("(adjust :8090 if your jetty-edge listens elsewhere)\n");
-        $this->stderr('Note: PHP client does not run the edge WebSocket agent. For live forwarding use the Jetty Go CLI.');
+        $this->stderr("(adjust :8090 if your ingress listens elsewhere)\n");
 
         try {
             $client->heartbeat($id);
@@ -814,38 +817,66 @@ final class Application
             $this->stderr('warning: initial heartbeat: '.$e->getMessage());
         }
 
-        $stop = false;
-        if (\function_exists('pcntl_async_signals')) {
-            \pcntl_async_signals(true);
-            $handler = function () use (&$stop): void {
-                $stop = true;
-            };
-            \pcntl_signal(\SIGINT, $handler);
-            \pcntl_signal(\SIGTERM, $handler);
-        } else {
-            $this->stderr("\n(ext-pcntl not loaded — Ctrl+C handling may vary by platform.)\n");
+        $ranEdgeAgent = false;
+        if (! $printUrlOnly && ! $skipEdge && $ws !== '' && $agentToken !== '') {
+            try {
+                EdgeAgent::run(
+                    $ws,
+                    $id,
+                    $agentToken,
+                    $localHost,
+                    $port,
+                    $client,
+                    $id,
+                    fn (string $m) => $this->stderr($m),
+                );
+                $ranEdgeAgent = true;
+            } catch (\Throwable $e) {
+                $this->stderr('edge agent failed: '.$e->getMessage());
+                $this->stderr('Continuing with heartbeats only (no HTTP forwarding until you fix edge connectivity).');
+            }
+        } elseif (! $printUrlOnly && ! $skipEdge && $ws === '') {
+            $this->stderr('Note: Bridge returned no edge WebSocket URL (JETTY_EDGE_WS_URL). Heartbeats only.');
+        } elseif (! $printUrlOnly && ! $skipEdge && $agentToken === '') {
+            $this->stderr('Note: no agent_token in API response — heartbeats only.');
         }
 
-        $this->stderr("\nSending heartbeats every 25s. Ctrl+C to delete this tunnel and exit.\n");
+        if ($ranEdgeAgent) {
+            // EdgeAgent already ran heartbeats during the session.
+        } else {
+            $this->stderr("\nSending heartbeats every 25s. Ctrl+C to delete this tunnel and exit.\n");
 
-        $nextBeat = time() + 25;
-        while (! $stop) {
-            if (\function_exists('pcntl_signal_dispatch')) {
-                \pcntl_signal_dispatch();
+            $stop = false;
+            if (\function_exists('pcntl_async_signals')) {
+                \pcntl_async_signals(true);
+                $handler = function () use (&$stop): void {
+                    $stop = true;
+                };
+                \pcntl_signal(\SIGINT, $handler);
+                \pcntl_signal(\SIGTERM, $handler);
+            } else {
+                $this->stderr("\n(ext-pcntl not loaded — Ctrl+C handling may vary by platform.)\n");
             }
-            if ($stop) {
-                break;
-            }
-            $now = time();
-            if ($now >= $nextBeat) {
-                try {
-                    $client->heartbeat($id);
-                } catch (\Throwable $e) {
-                    $this->stderr('heartbeat failed: '.$e->getMessage());
+
+            $nextBeat = time() + 25;
+            while (! $stop) {
+                if (\function_exists('pcntl_signal_dispatch')) {
+                    \pcntl_signal_dispatch();
                 }
-                $nextBeat = $now + 25;
+                if ($stop) {
+                    break;
+                }
+                $now = time();
+                if ($now >= $nextBeat) {
+                    try {
+                        $client->heartbeat($id);
+                    } catch (\Throwable $e) {
+                        $this->stderr('heartbeat failed: '.$e->getMessage());
+                    }
+                    $nextBeat = $now + 25;
+                }
+                usleep(200_000);
             }
-            usleep(200_000);
         }
 
         try {

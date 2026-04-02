@@ -2,7 +2,7 @@
 
 Composer package **`jetty/client`**: PHP build of the **`jetty`** CLI for the [Jetty](https://jetty.dev) tunnel API (`/api/tunnels`).
 
-**Scope:** `list`, `delete`, `share` (alias `http`) — register tunnels and send heartbeats. This client does **not** run the edge WebSocket agent; use the Jetty Go binary for that.
+**Scope:** `list`, `delete`, `share` (alias `http`) — register tunnels, connect the **edge WebSocket agent** (same protocol as the historical Go binary), forward HTTP to your local port, and send heartbeats. Use **`--skip-edge`** for registration + heartbeats only (no forwarding).
 
 ## Install
 
@@ -90,8 +90,9 @@ Bump **`ApiClient::VERSION`** in `src/ApiClient.php` when you tag a release so t
 ## Requirements
 
 - PHP 8.2+
-- Extensions: `curl`, `json`, `zlib` (for PHAR)
+- Extensions: `curl`, `json`, `openssl` (for `wss://` edge URLs), `zlib` (for PHAR)
 - Optional: `pcntl` for reliable Ctrl+C during `jetty share`
+- Dependencies include **amphp/websocket-client** (Composer) for the tunnel agent
 
 ## Replacing `jetty/php-cli`
 

@@ -1,18 +1,20 @@
 {
     "name": "jetty/client",
-    "description": "Jetty PHP client for the tunnel API (list, delete, share + heartbeats). Publish this tree as the jetty-client repository; require with Composer: jetty/client.",
+    "description": "Jetty PHP client for the tunnel API (list, delete, share + edge WebSocket agent + heartbeats). Publish this tree as the jetty-client repository; require with Composer: jetty/client.",
     "type": "library",
     "license": "MIT",
     "keywords": ["jetty", "tunnel", "cli", "api"],
     "require": {
         "php": "^8.2",
-        "composer-runtime-api": "^2.2",
         "ext-curl": "*",
         "ext-json": "*",
         "ext-mbstring": "*",
+        "composer-runtime-api": "^2.2",
+        "amphp/websocket-client": "^2.0",
         "laravel/prompts": "^0.3"
     },
     "suggest": {
+        "ext-openssl": "For `wss://` edge WebSocket URLs (`jetty share`)",
         "ext-pcntl": "For clean Ctrl+C handling when running `jetty share`",
         "ext-zlib": "Required to run the gzipped PHAR build (`composer run build-phar`)"
     },
