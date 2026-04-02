@@ -1682,7 +1682,7 @@ TXT;
             return $v;
         }
 
-        return 'tunnel.usejetty.online';
+        return 'tunnels.usejetty.online';
     }
 
     private function helpText(): string
