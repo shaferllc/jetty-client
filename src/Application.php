@@ -46,7 +46,7 @@ final class Application
                 'logout' => $this->cmdLogout($rest),
                 'reset' => $this->cmdReset($rest),
                 'config' => $this->cmdConfig($global, $rest),
-                'help', '--help', '-h' => $this->cmdHelp(),
+                'help', '--help', '-h' => $this->cmdHelp($rest),
                 default => throw new \InvalidArgumentException(
                     'Unknown command: '.$command.$this->unknownCommandUpgradeHint($command)."\n".$this->helpText()
                 ),
@@ -471,9 +471,22 @@ final class Application
             .'You can configure this version with `jetty config set api-url …` and `jetty config set token …`.';
     }
 
-    private function cmdHelp(): int
+    /**
+     * @param  list<string>  $rest
+     */
+    private function cmdHelp(array $rest): int
     {
+        $advanced = in_array('--advanced', $rest, true) || in_array('-a', $rest, true);
+        $unknown = array_values(array_filter($rest, fn (string $x) => ! in_array($x, ['--advanced', '-a'], true)));
+        if ($unknown !== []) {
+            throw new \InvalidArgumentException("Usage: jetty help [--advanced|-a]\n".$this->helpText());
+        }
         $this->stdout($this->helpText());
+        if ($advanced) {
+            $this->stdout($this->helpTextAdvanced());
+        } else {
+            $this->stdout("\nAdvanced (config file & environment variables): jetty help --advanced\n");
+        }
 
         return 0;
     }
@@ -696,6 +709,12 @@ final class Application
 
     private function cmdShare(array $global, array $args): int
     {
+        if (in_array('--help', $args, true) || in_array('-h', $args, true)) {
+            $this->stdout($this->shareUsageHelp());
+
+            return 0;
+        }
+
         $localHost = '127.0.0.1';
         $tunnelServerFlag = null;
         $printUrlOnly = false;
@@ -757,18 +776,23 @@ final class Application
 
                 continue;
             }
+            if (str_starts_with($arg, '--')) {
+                throw new \InvalidArgumentException('Unknown option: '.$arg."\n".$this->shareUsageSummary());
+            }
             $positional[] = $arg;
         }
 
         if (count($positional) > 1) {
-            throw new \InvalidArgumentException('Usage: jetty share [port] [--server=us-west-1] [--site=127.0.0.1] [--subdomain=label] [--print-url-only] [--skip-edge] (alias: http)  --skip-edge: register + heartbeats only, no WebSocket agent');
+            throw new \InvalidArgumentException("Too many arguments.\n".$this->shareUsageHelp());
         }
 
         $explicitPort = null;
         if ($positional !== []) {
             $rawPort = $positional[0];
             if (! is_numeric($rawPort) || (string) (int) $rawPort !== (string) $rawPort) {
-                throw new \InvalidArgumentException('port must be a whole number between 1 and 65535');
+                throw new \InvalidArgumentException(
+                    'Invalid port: expected 1–65535, or omit port to auto-detect a local dev server.'."\n".$this->shareUsageHelp()
+                );
             }
             $explicitPort = (int) $rawPort;
         }
@@ -930,6 +954,23 @@ final class Application
         }
     }
 
+    private function shareUsageSummary(): string
+    {
+        return 'Usage: jetty share [port] [--host=127.0.0.1] [--server=us-west-1] [--site=HOST] [--subdomain=label] [--print-url-only] [--skip-edge] (alias: http)';
+    }
+
+    private function shareUsageHelp(): string
+    {
+        return $this->shareUsageSummary().<<<'TXT'
+
+
+  port  Optional. If omitted, picks the first common dev port that responds on the upstream host (8000, 3000, 5173, …), or 8000 if none do.
+  --host= / --site= / --bind= / --local= / --local-host=  Upstream hostname or IP (default 127.0.0.1).
+  --skip-edge  Register + heartbeats only; no WebSocket forwarding agent.
+
+TXT;
+    }
+
     /**
      * @return array{0: int, 1: string|null} port and optional stderr hint when port was inferred
      */
@@ -989,16 +1030,7 @@ final class Application
         return <<<'TXT'
 Jetty PHP client (Composer package jetty/client) — tunnel API helper.
 
-Config file (recommended): JSON. First file wins:
-  --config=PATH, JETTY_CONFIG, ~/.config/jetty/config.json, ~/.jetty.json, ./jetty.config.json
-
-  { "api_url": "https://your-jetty.example", "token": "your-personal-access-token",
-    "subdomain": "optional-default-label", "custom_domain": "optional-hostname",
-    "tunnel_server": "optional-edge-region-e.g-us-west-1" }
-
-Values in the file override JETTY_* env for keys that are set. CLI flags override everything.
-
-User config file (~/.config/jetty/config.json):
+Common commands:
   jetty                      First-run: runs setup when no token is configured (same as onboard)
   jetty onboard [--region=eu]   First-run: browser login; auto-picks server (default Bridge https://usejetty.online)
   jetty setup                Change settings (menu; same as jetty config wizard)
@@ -1009,44 +1041,65 @@ User config file (~/.config/jetty/config.json):
   jetty logout               Remove saved API token only (same as: jetty config clear token)
   jetty reset                Clear all local user settings (~/.config/jetty/config.json + ~/.jetty.json)
 
-Environment (optional fallback):
-  JETTY_API_URL   Base URL for API calls (highest precedence)
-  JETTY_REGION, --region=   Regional Bridge host: https://{region}.usejetty.online (default: https://usejetty.online)
-  JETTY_BRIDGE_URL, JETTY_ONBOARD_BRIDGE_URL   Override Bridge root when JETTY_API_URL unset
-  JETTY_ALLOW_LOCAL_BRIDGE=1   Allow localhost/127.0.0.1 in saved api_url and bootstrap candidates (self-hosted dev)
-  JETTY_CLI_LOCAL_URL, JETTY_CLI_DEV_URL       Optional extra bootstrap URLs
-  JETTY_CLI_BOOTSTRAP_FALLBACKS                Comma-separated extra Bridge roots to try
-  JETTY_TOKEN     Personal access token from the dashboard
-  JETTY_TUNNEL_SERVER   Default tunnel/edge id for jetty share (e.g. us-west-1)
-  JETTY_LOCAL_PHAR_URL   If set (https?…), PHAR jetty update downloads from this URL every time (local Jetty app / dev); unset to use GitHub again
-
 Global flags:
-  --config=PATH   Use this JSON file (see above)
-  --api-url=URL   Override api URL
+  --config=PATH   Use a JSON config file (paths & schema: jetty help --advanced)
+  --api-url=URL   Override API base URL
   --token=TOKEN   Override token
+  --region=CODE   Regional Bridge (https://{region}.usejetty.online); default https://usejetty.online
 
 Commands:
   jetty version [--machine] [--check-update]   --machine: print semver only (for scripts)
-  jetty update [--check] [--force]   update this CLI: PHAR → latest GitHub release; Composer → composer update jetty/client (alias: self-update)
+  jetty update [--check] [--force]   PHAR or Composer: refresh jetty/client (alias: self-update)
   jetty onboard              (see also: plain `jetty` when no token)
   jetty setup
+  jetty help [--advanced|-a]   This help; --advanced lists config file & environment variables
   jetty logout
   jetty reset
   jetty list
   jetty delete <id>
   jetty config set|get|clear|wizard ...
-  jetty share [port] [--server=us-west-1] [--site=127.0.0.1] [--subdomain=label] [--print-url-only] [--skip-edge]
-    (alias: http)  --server= tunnel/edge id (letters, digits, . _ -); default from tunnel_server in config or JETTY_TUNNEL_SERVER
-    --site= local upstream hostname or IP (default 127.0.0.1); aliases --bind=, --local=, --local-host=; --host= deprecated
-    port optional: first open port among 8000,3000,5173,… or defaults to 8000
-
-PHAR path: default repo GitHub shaferllc/jetty (cli-v* + jetty-php.phar). Override with JETTY_PHAR_RELEASES_REPO or JETTY_CLI_GITHUB_REPO=owner/repo for forks.
-  With JETTY_LOCAL_PHAR_URL, update always re-fetches that URL (no semver skip). Same env as curl install from a local Jetty app.
-Composer path: runs composer in the project that owns jetty/client (needs composer on PATH or COMPOSER_BINARY).
-  update --check   PHAR: GitHub compare, or local URL info if JETTY_LOCAL_PHAR_URL; Composer: composer outdated jetty/client
-  Optional token: JETTY_PHAR_GITHUB_TOKEN (private repos / rate limits)
+  jetty share [port] [--host=127.0.0.1] [--server=us-west-1] [--site=HOST] [--subdomain=label] [--print-url-only] [--skip-edge]
+    (alias: http)  Omit port to auto-pick a responding dev port (8000, 3000, 5173, …) or default 8000
+    --server= tunnel/edge id; default from config.  --site= / --host= upstream host (default 127.0.0.1)
 
 Install: composer require jetty/client  (binary: vendor/bin/jetty)
+
+TXT;
+    }
+
+    private function helpTextAdvanced(): string
+    {
+        return <<<'TXT'
+
+── Config file (JSON, recommended) ──
+  First file wins:
+    --config=PATH, JETTY_CONFIG, ~/.config/jetty/config.json, ~/.jetty.json, ./jetty.config.json
+
+  {
+    "api_url": "https://your-jetty.example",
+    "token": "your-personal-access-token",
+    "subdomain": "optional-default-label",
+    "custom_domain": "optional-hostname",
+    "tunnel_server": "optional-edge-region-e.g-us-west-1"
+  }
+
+  Values in the file override JETTY_* env for keys that are set. CLI flags override everything.
+
+── Advanced: environment variables (optional) ──
+  JETTY_API_URL              Base URL for API calls (highest precedence)
+  JETTY_REGION               Same as --region= (regional Bridge host)
+  JETTY_BRIDGE_URL           Override Bridge root when JETTY_API_URL unset
+  JETTY_ONBOARD_BRIDGE_URL   Same, for onboarding only
+  JETTY_ALLOW_LOCAL_BRIDGE=1 Allow localhost/127.0.0.1 in saved api_url and bootstrap candidates (self-hosted dev)
+  JETTY_CLI_LOCAL_URL        Optional extra bootstrap URL
+  JETTY_CLI_DEV_URL          Optional extra bootstrap URL
+  JETTY_CLI_BOOTSTRAP_FALLBACKS   Comma-separated extra Bridge roots to try
+  JETTY_TOKEN                Personal access token from the dashboard
+  JETTY_TUNNEL_SERVER        Default tunnel/edge id for jetty share (e.g. us-west-1)
+  JETTY_LOCAL_PHAR_URL       If set (https?…), PHAR jetty update downloads from this URL every time; unset for GitHub
+  JETTY_PHAR_RELEASES_REPO   Override GitHub repo for PHAR releases
+  JETTY_CLI_GITHUB_REPO      owner/repo or URL for PHAR / installer resolution
+  JETTY_PHAR_GITHUB_TOKEN    Private repos / rate limits
 
 TXT;
     }
