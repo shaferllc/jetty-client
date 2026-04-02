@@ -710,6 +710,11 @@ final class Application
             throw new \RuntimeException('Could not resolve jetty/client install path.');
         }
 
+        $fromCwd = self::composerProjectRootFromCwd($raw);
+        if ($fromCwd !== null) {
+            return $fromCwd;
+        }
+
         $norm = str_replace('\\', '/', $raw);
         if (str_ends_with($norm, '/vendor/jetty/client')) {
             $root = dirname($raw, 3);
@@ -746,6 +751,44 @@ final class Application
         throw new \RuntimeException(
             'Could not resolve Composer project root for jetty/client (install path: '.$raw.').'
         );
+    }
+
+    /**
+     * Prefer the consumer project (directory containing vendor/jetty/client) by walking up from cwd.
+     *
+     * When jetty/client is installed via a path repository, {@see InstalledVersions::getInstallPath()}
+     * often returns the source tree (e.g. …/jetty-client), so Composer would run in the package repo
+     * instead of the app (e.g. beacon) that depends on it — the app lock would not update.
+     */
+    private static function composerProjectRootFromCwd(string $installPath): ?string
+    {
+        $cwd = getcwd();
+        if ($cwd === false) {
+            return null;
+        }
+        $resolvedInstall = realpath($installPath);
+        if ($resolvedInstall === false) {
+            return null;
+        }
+        $dir = $cwd;
+        for ($i = 0; $i < 32; $i++) {
+            $vendorJetty = $dir.\DIRECTORY_SEPARATOR.'vendor'.\DIRECTORY_SEPARATOR.'jetty'.\DIRECTORY_SEPARATOR.'client';
+            if (is_dir($vendorJetty)) {
+                $rj = realpath($vendorJetty);
+                if ($rj !== false && $rj === $resolvedInstall) {
+                    $root = realpath($dir);
+
+                    return $root !== false ? $root : $dir;
+                }
+            }
+            $parent = dirname($dir);
+            if ($parent === $dir) {
+                break;
+            }
+            $dir = $parent;
+        }
+
+        return null;
     }
 
     private static function resolveComposerBinary(): string
