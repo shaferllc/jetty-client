@@ -24,7 +24,7 @@ final class SetupWizard
         while (true) {
             self::out('');
             self::out('What would you like to change?');
-            self::out('  1) Server (reload from Bridge, set api_url)');
+            self::out('  1) Bridge & server — fetch the latest server list from Bridge and save the default for your region');
             self::out('  2) API token only');
             self::out('  3) Exit');
             self::outRaw('Choice [1]: ');
@@ -55,7 +55,7 @@ final class SetupWizard
         $path = Config::userConfigPath() ?? '(could not resolve config path)';
         self::out('Jetty config file: '.$path);
         if ($start->apiUrl !== '') {
-            self::out('  api_url: '.$start->apiUrl);
+            self::out('  Bridge API: '.$start->apiUrl);
         }
         self::out('  token: '.self::maskToken($start->token));
     }
@@ -85,7 +85,7 @@ final class SetupWizard
             if (trim($start->token) === '') {
                 $base = rtrim(Config::resolve($configFlag)->apiUrl, '/');
                 if ($base === '') {
-                    throw new \InvalidArgumentException('Pick a server first (option 1), or paste a token.');
+                    throw new \InvalidArgumentException('Run Bridge & server first (option 1), or paste a token.');
                 }
                 self::out('Browser sign-in…');
                 $tok = self::waitForBrowserToken($base);
@@ -116,7 +116,7 @@ final class SetupWizard
             }
             self::out('Try: export JETTY_BRIDGE_URL=https://usejetty.online   # or your self-hosted Bridge');
             self::out('     jetty config clear api-url');
-            self::out('Self-hosted dev: JETTY_ALLOW_LOCAL_BRIDGE=1 to allow http://127.0.0.1 / localhost in saved api_url.');
+            self::out('Self-hosted dev: JETTY_ALLOW_LOCAL_BRIDGE=1 to allow http://127.0.0.1 / localhost as your Bridge URL.');
 
             throw new \InvalidArgumentException('No reachable Bridge for onboarding.');
         }
@@ -245,8 +245,8 @@ final class SetupWizard
     }
 
     /**
-     * Apply server choice from bootstrap (sets api_url) before browser login so OAuth/token match the selected Bridge.
-     * Auto-selects: exact URL match for regional default, or name match, or first usejetty.online row, else first row.
+     * Apply server choice from bootstrap (persists server name + Bridge API base) before browser login so OAuth/token match.
+     * Auto-selects by region / default Bridge URL (usejetty.online), not a manual URL prompt.
      */
     private static function pickServerFromBootstrapAndPersist(array $boot, ?string $region): void
     {
@@ -340,7 +340,7 @@ final class SetupWizard
                 return;
             }
             if ($base === '') {
-                throw new \InvalidArgumentException('Paste a token, or pick a server first (jetty onboard / jetty setup).');
+                throw new \InvalidArgumentException('Paste a token, or run onboarding first (jetty onboard / jetty setup).');
             }
             self::out('Browser sign-in…');
             $tok = self::waitForBrowserToken($base);

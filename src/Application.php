@@ -38,6 +38,7 @@ final class Application
             return match ($command) {
                 'version', '--version', '-V' => $this->cmdVersion($rest),
                 'update', 'self-update' => $this->cmdSelfUpdate($rest),
+                'global-update' => $this->cmdGlobalUpdate($rest),
                 'install-client' => $this->cmdInstallClient($rest),
                 'list' => $this->cmdList($global),
                 'delete' => $this->cmdDelete($global, $rest),
@@ -317,6 +318,176 @@ final class Application
         }
 
         return $this->updateComposerJettyClient($args);
+    }
+
+    /**
+     * Update Composer global and/or a global PHAR path (not the current project’s vendor install).
+     *
+     * @param  list<string>  $args
+     */
+    private function cmdGlobalUpdate(array $args): int
+    {
+        $onlyComposer = false;
+        $onlyPhar = false;
+        $pass = [];
+        foreach ($args as $a) {
+            if ($a === '--composer') {
+                $onlyComposer = true;
+
+                continue;
+            }
+            if ($a === '--phar') {
+                $onlyPhar = true;
+
+                continue;
+            }
+            if (in_array($a, ['--check', '--force'], true)) {
+                $pass[] = $a;
+
+                continue;
+            }
+            throw new \InvalidArgumentException(
+                'Usage: jetty global-update [--composer] [--phar] [--check] [--force]'."\n"
+                .'  Default: update Composer global jetty/client (if installed) and/or PHAR at JETTY_PHAR_PATH or ~/.local/bin/jetty (if present).'."\n"
+                .'  --composer  Only run composer global update jetty/client'."\n"
+                .'  --phar      Only update the global PHAR file'."\n"
+                .'  --check     Show outdated / dry-run (same as jetty update --check)'."\n"
+                .'  --force     Pass --no-cache to Composer; re-download PHAR even if semver matches'
+            );
+        }
+
+        if ($onlyComposer && $onlyPhar) {
+            throw new \InvalidArgumentException('Use only one of --composer or --phar, or omit both to update every global target that exists.');
+        }
+
+        $wantComposer = ! $onlyPhar;
+        $wantPhar = ! $onlyComposer;
+
+        $hasComposer = $this->isGlobalComposerJettyInstalled();
+        $pharPath = $this->resolveGlobalPharPathForUpdate();
+
+        if ($wantComposer && ! $hasComposer) {
+            if ($onlyComposer) {
+                throw new \RuntimeException(
+                    'jetty/client is not installed globally. Run: composer global require jetty/client'
+                );
+            }
+            $this->stdout('Skipping Composer global: jetty/client is not installed (composer global show jetty/client).');
+        }
+
+        if ($wantPhar && $pharPath === null) {
+            if ($onlyPhar) {
+                throw new \RuntimeException(
+                    'No global PHAR found. Set JETTY_PHAR_PATH=/path/to/jetty.phar or install to ~/.local/bin/jetty'
+                );
+            }
+            $this->stdout('Skipping PHAR: no file at JETTY_PHAR_PATH or ~/.local/bin/jetty.');
+        }
+
+        $didSomething = false;
+        $exit = 0;
+
+        if ($wantComposer && $hasComposer) {
+            $r = $this->updateComposerGlobalJettyClient($pass);
+            if ($r !== 0) {
+                $exit = $r;
+            }
+            $didSomething = true;
+        }
+
+        if ($wantPhar && $pharPath !== null) {
+            if ($didSomething) {
+                $this->stdout('');
+            }
+            $this->stdout('Global PHAR target: '.$pharPath);
+            $this->updatePharInPlace($pass, $pharPath);
+            $didSomething = true;
+        }
+
+        if (! $didSomething) {
+            throw new \RuntimeException(
+                'Nothing to update: install Composer global jetty/client and/or a PHAR at ~/.local/bin/jetty (see jetty help).'
+            );
+        }
+
+        return $exit;
+    }
+
+    /**
+     * @param  list<string>  $args  --check, --force
+     */
+    private function updateComposerGlobalJettyClient(array $args): int
+    {
+        $composer = self::resolveComposerBinary();
+        $home = getenv('HOME') ?: getenv('USERPROFILE');
+        if (! is_string($home) || $home === '') {
+            throw new \RuntimeException('Cannot resolve home directory for composer global.');
+        }
+
+        $checkOnly = in_array('--check', $args, true);
+        $force = in_array('--force', $args, true);
+
+        if ($checkOnly) {
+            $this->stdout('Install: Composer global');
+            $code = self::runComposerInDirectory($home, $composer, ['global', 'show', 'jetty/client', '--no-ansi']);
+            if ($code !== 0) {
+                $this->stdout('jetty/client is not installed globally. Run: composer global require jetty/client');
+
+                return 1;
+            }
+            self::runComposerInDirectory($home, $composer, ['global', 'outdated', 'jetty/client', '--direct', '--no-ansi']);
+
+            return 0;
+        }
+
+        $cmd = ['global', 'update', 'jetty/client', '--no-interaction'];
+        if ($force) {
+            $cmd[] = '--no-cache';
+        }
+
+        $code = self::runComposerInDirectory($home, $composer, $cmd);
+        if ($code !== 0) {
+            throw new \RuntimeException(
+                'composer '.implode(' ', $cmd).' failed (exit '.$code.'). Try: composer global update jetty/client'
+            );
+        }
+
+        $this->stdout('Updated jetty/client via Composer global. Run jetty version to confirm (use the global vendor/bin/jetty on PATH).');
+        $this->emitPostUpdateConfigTip();
+
+        return 0;
+    }
+
+    private function isGlobalComposerJettyInstalled(): bool
+    {
+        try {
+            $composer = self::resolveComposerBinary();
+        } catch (\Throwable) {
+            return false;
+        }
+        $home = getenv('HOME') ?: getenv('USERPROFILE');
+        if (! is_string($home) || $home === '') {
+            return false;
+        }
+
+        return self::runComposerInDirectory($home, $composer, ['global', 'show', 'jetty/client', '--no-ansi']) === 0;
+    }
+
+    private function resolveGlobalPharPathForUpdate(): ?string
+    {
+        $env = getenv('JETTY_PHAR_PATH');
+        if (is_string($env) && $env !== '' && is_file($env)) {
+            return $env;
+        }
+        $home = getenv('HOME') ?: getenv('USERPROFILE');
+        if (is_string($home) && $home !== '') {
+            $p = $home.\DIRECTORY_SEPARATOR.'.local'.\DIRECTORY_SEPARATOR.'bin'.\DIRECTORY_SEPARATOR.'jetty';
+            if (is_file($p)) {
+                return $p;
+            }
+        }
+
+        return null;
     }
 
     /**
@@ -873,9 +1044,15 @@ final class Application
         $printUrlOnly = false;
         $skipEdge = false;
         $subdomain = null;
+        $shareVerbose = false;
 
         $positional = [];
         foreach ($args as $arg) {
+            if ($arg === '--verbose' || $arg === '-v' || $arg === '--errors') {
+                $shareVerbose = true;
+
+                continue;
+            }
             if (str_starts_with($arg, '--server=')) {
                 $v = trim(substr($arg, strlen('--server=')));
                 if ($v === '') {
@@ -969,11 +1146,29 @@ final class Application
             $this->assertTunnelServerLabel($tunnelServer);
         }
 
+        if ($shareVerbose) {
+            $this->shareVerboseLog(true, 'API base: '.$client->apiBaseUrl());
+            $this->shareVerboseLog(true, 'share target: '.$localHost.':'.$port.'; subdomain='.($subdomain ?? '').'; tunnel_server='.($tunnelServer ?? 'null'));
+        }
+
         if ($portHint !== null && ! $printUrlOnly) {
             $this->stderr($portHint);
         }
 
+        if ($shareVerbose) {
+            $this->shareVerboseLog(true, 'POST /api/tunnels body: '.json_encode([
+                'local_host' => $localHost,
+                'local_port' => $port,
+                'subdomain' => $subdomain,
+                'server' => $tunnelServer,
+            ], JSON_THROW_ON_ERROR));
+        }
+
         $data = $client->createTunnel($localHost, $port, $subdomain, $tunnelServer);
+
+        if ($shareVerbose) {
+            $this->shareVerboseLog(true, 'createTunnel response (redacted): '.json_encode($this->shareRedactTunnelResponseForLog($data), JSON_THROW_ON_ERROR));
+        }
 
         $publicUrl = (string) ($data['public_url'] ?? '');
         $localTarget = (string) ($data['local_target'] ?? '');
@@ -1008,14 +1203,20 @@ final class Application
 
         try {
             $client->heartbeat($id);
+            if ($shareVerbose) {
+                $this->shareVerboseLog(true, 'initial heartbeat OK for tunnel id '.$id);
+            }
         } catch (\Throwable $e) {
             $this->stderr('warning: initial heartbeat: '.$e->getMessage());
+            if ($shareVerbose) {
+                $this->shareVerboseLog(true, 'initial heartbeat exception: '.$e->getMessage());
+            }
         }
 
-        $ranEdgeAgent = false;
+        $edgeOutcome = null;
         if (! $printUrlOnly && ! $skipEdge && $ws !== '' && $agentToken !== '') {
             try {
-                EdgeAgent::run(
+                $edgeOutcome = EdgeAgent::run(
                     $ws,
                     $id,
                     $agentToken,
@@ -1024,11 +1225,16 @@ final class Application
                     $client,
                     $id,
                     fn (string $m) => $this->stderr($m),
+                    $shareVerbose,
                 );
-                $ranEdgeAgent = true;
             } catch (\Throwable $e) {
                 $this->stderr('edge agent failed: '.$e->getMessage());
+                if ($shareVerbose) {
+                    $this->stderr('[jetty:share] '.get_class($e).' in '.$e->getFile().':'.$e->getLine());
+                    $this->stderr('[jetty:share] '.$e->getTraceAsString());
+                }
                 $this->stderr('Continuing with heartbeats only (no HTTP forwarding until you fix edge connectivity).');
+                $edgeOutcome = EdgeAgentResult::FailedEarly;
             }
         } elseif (! $printUrlOnly && ! $skipEdge && $ws === '') {
             $this->stderr('Note: Bridge returned no edge WebSocket URL (JETTY_EDGE_WS_URL). Heartbeats only.');
@@ -1036,52 +1242,112 @@ final class Application
             $this->stderr('Note: no agent_token in API response — heartbeats only.');
         }
 
-        if ($ranEdgeAgent) {
-            // EdgeAgent already ran heartbeats during the session.
-        } else {
-            $this->stderr("\nSending heartbeats every 25s. Ctrl+C to delete this tunnel and exit.\n");
-
-            $stop = false;
-            if (\function_exists('pcntl_async_signals')) {
-                \pcntl_async_signals(true);
-                $handler = function () use (&$stop): void {
-                    $stop = true;
-                };
-                \pcntl_signal(\SIGINT, $handler);
-                \pcntl_signal(\SIGTERM, $handler);
-            } else {
-                $this->stderr("\n(ext-pcntl not loaded — Ctrl+C handling may vary by platform.)\n");
+        $needsHeartbeatLoop = true;
+        if ($edgeOutcome === EdgeAgentResult::Finished) {
+            $needsHeartbeatLoop = false;
+            if ($shareVerbose) {
+                $this->shareVerboseLog(true, 'edge agent finished; skipping heartbeat fallback');
             }
+        } elseif ($edgeOutcome === EdgeAgentResult::FailedEarly) {
+            $this->stderr('');
+            $this->stderr('Edge WebSocket agent did not stay up; falling back to heartbeats only (tunnel stays registered).');
+            $this->stderr('Fix edge connectivity, or use --skip-edge for registration + heartbeats without the agent. Ctrl+C to exit and delete the tunnel.');
+            $needsHeartbeatLoop = true;
+        }
 
-            $nextBeat = time() + 25;
-            while (! $stop) {
-                if (\function_exists('pcntl_signal_dispatch')) {
-                    \pcntl_signal_dispatch();
-                }
-                if ($stop) {
-                    break;
-                }
-                $now = time();
-                if ($now >= $nextBeat) {
-                    try {
-                        $client->heartbeat($id);
-                    } catch (\Throwable $e) {
-                        $this->stderr('heartbeat failed: '.$e->getMessage());
-                    }
-                    $nextBeat = $now + 25;
-                }
-                usleep(200_000);
-            }
+        if ($needsHeartbeatLoop) {
+            $this->runShareHeartbeatLoop($client, $id, $shareVerbose);
         }
 
         try {
+            if ($shareVerbose) {
+                $this->shareVerboseLog(true, 'DELETE /api/tunnels/'.$id);
+            }
             $client->deleteTunnel($id);
             $this->stderr("Tunnel {$id} deleted.\n");
         } catch (\Throwable $e) {
             $this->stderr('warning: could not delete tunnel '.$id.': '.$e->getMessage());
+            if ($shareVerbose) {
+                $this->stderr('[jetty:share] delete exception: '.$e->getTraceAsString());
+            }
         }
 
         return 0;
+    }
+
+    private function shareVerboseLog(bool $verbose, string $message): void
+    {
+        if ($verbose) {
+            $this->stderr('[jetty:share] '.$message);
+        }
+    }
+
+    /**
+     * @param  array<string, mixed>  $data
+     * @return array<string, mixed>
+     */
+    private function shareRedactTunnelResponseForLog(array $data): array
+    {
+        $out = $data;
+        if (isset($out['agent_token']) && is_string($out['agent_token'])) {
+            $out['agent_token'] = '(length '.strlen($out['agent_token']).')';
+        }
+
+        return $out;
+    }
+
+    private function runShareHeartbeatLoop(ApiClient $client, int $tunnelId, bool $verbose): void
+    {
+        $this->stderr("\nSending heartbeats every 25s. Ctrl+C to delete this tunnel and exit.\n");
+        if ($verbose) {
+            $this->shareVerboseLog(true, 'heartbeat loop start (tunnel id '.$tunnelId.')');
+        }
+
+        $stop = false;
+        if (\function_exists('pcntl_async_signals')) {
+            \pcntl_async_signals(true);
+            $handler = function () use (&$stop, $verbose): void {
+                $stop = true;
+                if ($verbose) {
+                    fwrite(\STDERR, "[jetty:share] caught signal; stopping heartbeat loop\n");
+                }
+            };
+            \pcntl_signal(\SIGINT, $handler);
+            \pcntl_signal(\SIGTERM, $handler);
+        } else {
+            $this->stderr("\n(ext-pcntl not loaded — Ctrl+C handling may vary by platform.)\n");
+        }
+
+        $nextBeat = time() + 25;
+        $beatNum = 0;
+        while (! $stop) {
+            if (\function_exists('pcntl_signal_dispatch')) {
+                \pcntl_signal_dispatch();
+            }
+            if ($stop) {
+                break;
+            }
+            $now = time();
+            if ($now >= $nextBeat) {
+                try {
+                    $client->heartbeat($tunnelId);
+                    $beatNum++;
+                    if ($verbose) {
+                        $this->shareVerboseLog(true, 'heartbeat #'.$beatNum.' OK');
+                    }
+                } catch (\Throwable $e) {
+                    $this->stderr('heartbeat failed: '.$e->getMessage());
+                    if ($verbose) {
+                        $this->shareVerboseLog(true, 'heartbeat exception: '.get_class($e).' '.$e->getMessage());
+                    }
+                }
+                $nextBeat = $now + 25;
+            }
+            usleep(200_000);
+        }
+        if ($verbose) {
+            $this->shareVerboseLog(true, 'heartbeat loop end');
+        }
     }
 
     private function parseShareUpstreamValue(string $arg, string $prefix): string
@@ -1109,7 +1375,7 @@ final class Application
 
     private function shareUsageSummary(): string
     {
-        return 'Usage: jetty share [port] [--host=127.0.0.1] [--server=us-west-1] [--site=HOST] [--subdomain=label] [--print-url-only] [--skip-edge] (alias: http)';
+        return 'Usage: jetty share [port] [--host=127.0.0.1] [--server=us-west-1] [--site=HOST] [--subdomain=label] [--print-url-only] [--skip-edge] [--verbose|-v|--errors] (alias: http)';
     }
 
     private function shareUsageHelp(): string
@@ -1120,6 +1386,7 @@ final class Application
   port  Optional. If omitted, picks the first common dev port that responds on the upstream host (8000, 3000, 5173, …), or 8000 if none do.
   --host= / --site= / --bind= / --local= / --local-host=  Upstream hostname or IP (default 127.0.0.1).
   --skip-edge  Register + heartbeats only; no WebSocket forwarding agent.
+  --verbose / -v / --errors  Log connection steps, heartbeats, and edge WebSocket frames (stderr).
 
 TXT;
     }
@@ -1204,7 +1471,9 @@ Commands:
   jetty version [--machine] [--install] [--check-update]
     --machine: semver only (scripts)  --install: how this binary was installed + update hint
     --check-update: PHAR→GitHub; Composer→Packagist (same as jetty update --check)
-  jetty update [--check] [--force]   PHAR or Composer: refresh jetty/client (alias: self-update)
+  jetty update [--check] [--force]   Updates this binary’s install (PHAR file or project/global Composer)
+  jetty global-update [--composer|--phar] [--check] [--force]
+    Update Composer global jetty/client and/or PHAR at JETTY_PHAR_PATH or ~/.local/bin/jetty (default: both if present)
   jetty install-client       composer require jetty/client in the current project (useful with a global jetty on PATH)
   jetty onboard              (see also: plain `jetty` when no token)
   jetty setup
@@ -1214,13 +1483,14 @@ Commands:
   jetty list
   jetty delete <id>
   jetty config set|get|clear|wizard ...
-  jetty share [port] [--host=127.0.0.1] [--server=us-west-1] [--site=HOST] [--subdomain=label] [--print-url-only] [--skip-edge]
+  jetty share [port] [--host=127.0.0.1] [--server=us-west-1] [--site=HOST] [--subdomain=label] [--print-url-only] [--skip-edge] [--verbose|-v|--errors]
     (alias: http)  Omit port to auto-pick a responding dev port (8000, 3000, 5173, …) or default 8000
     --server= tunnel/edge id; default from config.  --site= / --host= upstream host (default 127.0.0.1)
 
 Install: composer require jetty/client  (or: composer global require jetty/client — put Composer’s global vendor/bin on PATH)
   Same config (~/.config/jetty/config.json) for PHAR and Composer. Releases: one “Release CLI” workflow ships the PHAR on GitHub and the same version to Packagist — bump once, not twice.
   Day to day: pick one binary (PHAR or Composer); jetty update only upgrades the copy you run (see jetty version --install).
+  jetty global-update updates Composer global jetty/client and/or a PHAR at ~/.local/bin/jetty (or JETTY_PHAR_PATH) — from a project vendor/bin/jetty too.
 
 TXT;
     }
@@ -1255,6 +1525,7 @@ TXT;
   JETTY_TOKEN                Personal access token from the dashboard
   JETTY_TUNNEL_SERVER        Default tunnel/edge id for jetty share (e.g. us-west-1)
   JETTY_LOCAL_PHAR_URL       If set (https?…), PHAR jetty update downloads from this URL every time; unset for GitHub
+  JETTY_PHAR_PATH            Explicit path to a global PHAR for jetty global-update --phar (default: ~/.local/bin/jetty)
   JETTY_PHAR_RELEASES_REPO   Override GitHub repo for PHAR releases
   JETTY_CLI_GITHUB_REPO      owner/repo or URL for PHAR / installer resolution
   JETTY_PHAR_GITHUB_TOKEN    Private repos / rate limits

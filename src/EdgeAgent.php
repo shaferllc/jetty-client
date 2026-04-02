@@ -32,6 +32,8 @@ final class EdgeAgent
     /**
      * Blocks until the edge connection closes or the user stops (signal / cancellation).
      * Runs heartbeats concurrently (same interval as {@see Application} share loop).
+     *
+     * @param  callable(string): void  $stderr  Always receives errors and important status lines
      */
     public static function run(
         string $wsUrl,
@@ -42,15 +44,30 @@ final class EdgeAgent
         ApiClient $apiClient,
         int $heartbeatTunnelId,
         callable $stderr,
-    ): void {
-        EventLoop::run(function () use ($wsUrl, $tunnelId, $agentToken, $localHost, $localPort, $apiClient, $heartbeatTunnelId, $stderr): void {
+        bool $verbose = false,
+    ): EdgeAgentResult {
+        $v = function (string $m) use ($verbose, $stderr): void {
+            if ($verbose) {
+                $stderr('[jetty:edge] '.$m);
+            }
+        };
+
+        $box = new class
+        {
+            public EdgeAgentResult $result = EdgeAgentResult::FailedEarly;
+        };
+
+        EventLoop::run(function () use ($wsUrl, $tunnelId, $agentToken, $localHost, $localPort, $apiClient, $heartbeatTunnelId, $stderr, $v, $box): void {
             $state = new class
             {
                 public bool $running = true;
             };
 
             $cancelRead = new DeferredCancellation;
-            $onStop = function () use ($state, $cancelRead): void {
+            $onStop = function () use ($state, $cancelRead, $v, $verbose): void {
+                if ($verbose) {
+                    $v('stop: signal or cancellation');
+                }
                 $state->running = false;
                 $cancelRead->cancel();
             };
@@ -59,14 +76,18 @@ final class EdgeAgent
             try {
                 $sigIds[] = EventLoop::onSignal(\SIGINT, $onStop);
                 $sigIds[] = EventLoop::onSignal(\SIGTERM, $onStop);
-            } catch (UnsupportedFeatureException) {
+                $v('registered SIGINT/SIGTERM handlers');
+            } catch (UnsupportedFeatureException $e) {
+                $stderr('edge: signal handlers unavailable: '.$e->getMessage());
             }
 
             try {
+                $v('connecting WebSocket: '.self::redactWsUrlForLog($wsUrl));
                 try {
                     $conn = connect($wsUrl);
                 } catch (\Throwable $e) {
                     $stderr('edge WebSocket connect failed: '.$e->getMessage());
+                    $v('connect exception: '.$e::class.' '.$e->getMessage());
 
                     return;
                 }
@@ -77,38 +98,52 @@ final class EdgeAgent
                     return;
                 }
 
+                $v('WebSocket connected; sending register (tunnel_id='.$tunnelId.', agent_token len='.strlen($agentToken).')');
                 $reg = json_encode([
                     'type' => self::TYPE_REGISTER,
                     'tunnel_id' => $tunnelId,
                     'agent_token' => $agentToken,
                 ], JSON_THROW_ON_ERROR);
                 $conn->sendText($reg);
+                $v('register frame sent');
 
                 $first = $conn->receive();
                 if ($first === null) {
                     $stderr('edge: closed before registration ack');
+                    $v('first receive() returned null');
 
                     return;
                 }
 
                 $rawFirst = $first->buffer();
+                $v('first frame length='.strlen($rawFirst).' bytes');
                 $type = self::parseType($rawFirst);
+                $v('first frame type='.$type);
                 if ($type === self::TYPE_ERROR) {
                     /** @var array<string, mixed> $err */
                     $err = json_decode($rawFirst, true, 512, JSON_THROW_ON_ERROR);
                     $stderr('edge error: '.(string) ($err['message'] ?? $rawFirst));
+                    if ($verbose) {
+                        $stderr('[jetty:edge] error payload: '.$rawFirst);
+                    }
 
                     return;
                 }
                 if ($type !== self::TYPE_REGISTERED) {
                     $stderr('edge: unexpected first message: '.$rawFirst);
+                    if ($verbose) {
+                        $stderr('[jetty:edge] full first message: '.$rawFirst);
+                    }
 
                     return;
                 }
 
+                $box->result = EdgeAgentResult::Finished;
                 $stderr('Edge agent connected; forwarding HTTP to local upstream.');
+                $v('registration acknowledged; starting heartbeat task + receive loop');
 
-                async(function () use ($state, $apiClient, $heartbeatTunnelId, $stderr): void {
+                async(function () use ($state, $apiClient, $heartbeatTunnelId, $stderr, $v, $verbose): void {
+                    $n = 0;
                     while ($state->running) {
                         delay(25.0);
                         if (! $state->running) {
@@ -116,41 +151,82 @@ final class EdgeAgent
                         }
                         try {
                             $apiClient->heartbeat($heartbeatTunnelId);
+                            $n++;
+                            if ($verbose) {
+                                $v('heartbeat #'.$n.' OK (tunnel id '.$heartbeatTunnelId.')');
+                            }
                         } catch (\Throwable $e) {
                             $stderr('heartbeat failed: '.$e->getMessage());
+                            $v('heartbeat exception: '.$e::class.' '.$e->getMessage());
                         }
                     }
+                    $v('heartbeat task exiting');
                 })->ignore();
 
                 try {
+                    $msgNum = 0;
                     while ($state->running) {
                         try {
                             $msg = $conn->receive($cancelRead->getCancellation());
-                        } catch (CancelledException) {
+                        } catch (CancelledException $e) {
+                            $v('receive cancelled: '.$e->getMessage());
+
                             break;
                         }
                         if ($msg === null) {
+                            $v('receive() returned null — connection closed');
+
                             break;
                         }
                         $raw = $msg->buffer();
-                        if (self::parseType($raw) !== self::TYPE_HTTP_REQUEST) {
+                        $msgNum++;
+                        $ft = self::parseType($raw);
+                        if ($ft !== self::TYPE_HTTP_REQUEST) {
+                            $v('frame #'.$msgNum.' type='.$ft.' (ignored, not http_request)');
+
                             continue;
                         }
                         /** @var array<string, mixed> $req */
                         $req = json_decode($raw, true, 512, JSON_THROW_ON_ERROR);
+                        $method = strtoupper((string) ($req['method'] ?? '?'));
+                        $path = (string) ($req['path'] ?? '/');
+                        $v('http_request #'.$msgNum.' '.$method.' '.$path.' → http://'.$localHost.':'.$localPort.$path);
                         $res = self::handleHttpRequest($localHost, $localPort, $req);
                         $conn->sendText(json_encode($res, JSON_THROW_ON_ERROR));
+                        $v('http_response sent for request_id='.(string) ($req['request_id'] ?? ''));
                     }
+                } catch (\Throwable $e) {
+                    $stderr('edge receive loop error: '.$e->getMessage());
+                    $v('receive loop exception: '.$e::class.' '.$e->getMessage());
                 } finally {
                     $state->running = false;
                     $conn->close();
+                    $v('WebSocket connection closed');
                 }
             } finally {
                 foreach ($sigIds as $id) {
                     EventLoop::cancel($id);
                 }
+                $v('EventLoop closure finished');
             }
         });
+
+        return $box->result;
+    }
+
+    private static function redactWsUrlForLog(string $wsUrl): string
+    {
+        $parts = parse_url($wsUrl);
+        if (! is_array($parts)) {
+            return $wsUrl;
+        }
+        $scheme = (string) ($parts['scheme'] ?? 'ws');
+        $host = (string) ($parts['host'] ?? '');
+        $port = isset($parts['port']) ? ':'.$parts['port'] : '';
+        $path = (string) ($parts['path'] ?? '/');
+        $q = isset($parts['query']) ? '?…' : '';
+
+        return $scheme.'://'.$host.$port.$path.$q;
     }
 
     private static function parseType(string $raw): string

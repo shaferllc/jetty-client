@@ -16,6 +16,11 @@ final class ApiClient
         private readonly string $token,
     ) {}
 
+    public function apiBaseUrl(): string
+    {
+        return $this->baseUrl;
+    }
+
     /**
      * @return array<string, mixed>
      */

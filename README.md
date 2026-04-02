@@ -92,6 +92,8 @@ Prebuilt **`jetty-php.phar`** (Box output filename) is attached to **`cli-v*`** 
 
 **Composer install:** `jetty update` runs **`composer update jetty/client --no-interaction`** in the Composer project that owns the package (global or app). Requires **`composer`** on `PATH` or **`COMPOSER_BINARY`**. **`--check`** runs `composer outdated jetty/client` (or `composer show --self --latest` when you are developing this repo as the root package). **`--force`** adds **`--no-cache`** to Composer.
 
+**Update global installs from a project copy:** **`jetty global-update`** runs **`composer global update jetty/client`** when `jetty/client` is installed globally, and/or refreshes a PHAR at **`~/.local/bin/jetty`** or **`JETTY_PHAR_PATH`**. Use **`--composer`** or **`--phar`** to update only one. Same **`--check`** / **`--force`** as `jetty update`.
+
 **Default GitHub repo (PHAR path):** **`shaferllc/jetty`** (`ApiClient::DEFAULT_PHAR_RELEASES_REPO`). **Forks / private:** **`JETTY_PHAR_RELEASES_REPO`** or **`JETTY_CLI_GITHUB_REPO`**. Optional **`JETTY_PHAR_GITHUB_TOKEN`** for private repos or rate limits.
 
 **Local Jetty app (e.g. `jetty.test`):** set **`JETTY_LOCAL_PHAR_URL`** to your **`/install/jetty-local.phar`** URL (same as the curl installer). Then **`jetty update`** always re-downloads that PHAR—no GitHub semver gate—so each new build is picked up. Unset the variable to use GitHub releases again. Your **`~/.config/jetty/config.json`** is not touched by update; you only need **`jetty setup`** again if you want to change Bridge URL or token.
