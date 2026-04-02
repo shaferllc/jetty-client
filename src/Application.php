@@ -1040,16 +1040,35 @@ final class Application
         }
 
         $localHost = '127.0.0.1';
+        $upstreamExplicit = false;
         $tunnelServerFlag = null;
         $printUrlOnly = false;
         $skipEdge = false;
         $subdomain = null;
         $shareVerbose = false;
+        $noDetect = false;
+        $serveDocroot = null;
 
         $positional = [];
         foreach ($args as $arg) {
             if ($arg === '--verbose' || $arg === '-v' || $arg === '--errors') {
                 $shareVerbose = true;
+
+                continue;
+            }
+            if ($arg === '--no-detect') {
+                $noDetect = true;
+
+                continue;
+            }
+            if ($arg === '--serve') {
+                $serveDocroot = $this->shareDefaultServeDocroot();
+
+                continue;
+            }
+            if (str_starts_with($arg, '--serve=')) {
+                $p = substr($arg, strlen('--serve='));
+                $serveDocroot = $p === '' ? $this->shareDefaultServeDocroot() : $this->shareResolveServeDocroot($p);
 
                 continue;
             }
@@ -1065,26 +1084,31 @@ final class Application
             }
             if (str_starts_with($arg, '--site=')) {
                 $localHost = $this->parseShareUpstreamValue($arg, '--site=');
+                $upstreamExplicit = true;
 
                 continue;
             }
             if (str_starts_with($arg, '--bind=')) {
                 $localHost = $this->parseShareUpstreamValue($arg, '--bind=');
+                $upstreamExplicit = true;
 
                 continue;
             }
             if (str_starts_with($arg, '--local=')) {
                 $localHost = $this->parseShareUpstreamValue($arg, '--local=');
+                $upstreamExplicit = true;
 
                 continue;
             }
             if (str_starts_with($arg, '--local-host=')) {
                 $localHost = $this->parseShareUpstreamValue($arg, '--local-host=');
+                $upstreamExplicit = true;
 
                 continue;
             }
             if (str_starts_with($arg, '--host=')) {
                 $localHost = $this->parseShareUpstreamValue($arg, '--host=');
+                $upstreamExplicit = true;
 
                 continue;
             }
@@ -1127,11 +1151,53 @@ final class Application
             $explicitPort = (int) $rawPort;
         }
 
-        [$port, $portHint] = $this->resolveSharePort($localHost, $explicitPort);
+        if ($printUrlOnly && $serveDocroot !== null) {
+            throw new \InvalidArgumentException('--serve cannot be combined with --print-url-only.');
+        }
+
+        $builtInServerProc = null;
+        $pendingServe = null;
+        $port = 8000;
+        $portHint = null;
+
+        if ($serveDocroot !== null) {
+            $listenPort = $explicitPort ?? $this->shareFindFreeTcpPort();
+            if ($listenPort < 1 || $listenPort > 65535) {
+                throw new \InvalidArgumentException('Invalid port for --serve.');
+            }
+            $pendingServe = ['docroot' => $serveDocroot, 'port' => $listenPort];
+            $localHost = '127.0.0.1';
+            $port = $listenPort;
+            $portHint = 'PHP built-in server → http://127.0.0.1:'.$listenPort.' (root: '.$serveDocroot.')';
+            $upstreamExplicit = true;
+        } else {
+            $detected = null;
+            if (! $noDetect && ! $upstreamExplicit && $explicitPort === null && getenv('JETTY_SHARE_NO_DETECT') !== '1') {
+                $cwd = getcwd();
+                if ($cwd !== false) {
+                    $detected = LocalDevDetector::detect($cwd);
+                }
+            }
+            if ($detected !== null) {
+                $localHost = $detected['host'];
+                $port = $detected['port'];
+                $portHint = $detected['hint'];
+            } else {
+                [$port, $portHint] = $this->resolveSharePort($localHost, $explicitPort);
+            }
+        }
 
         $cfg = $this->resolvedConfig($global);
         $cfg->validate();
         $client = new ApiClient($cfg->apiUrl, $cfg->token);
+
+        if ($pendingServe !== null) {
+            try {
+                $builtInServerProc = $this->shareStartPhpBuiltInServer($pendingServe['docroot'], $pendingServe['port']);
+            } catch (\Throwable $e) {
+                throw new \RuntimeException('Failed to start PHP built-in server: '.$e->getMessage());
+            }
+        }
         if ($subdomain === null || trim((string) $subdomain) === '') {
             $d = trim($cfg->defaultSubdomain);
             if ($d !== '') {
@@ -1164,29 +1230,30 @@ final class Application
             ], JSON_THROW_ON_ERROR));
         }
 
-        $data = $client->createTunnel($localHost, $port, $subdomain, $tunnelServer);
+        try {
+            $data = $client->createTunnel($localHost, $port, $subdomain, $tunnelServer);
 
-        if ($shareVerbose) {
-            $this->shareVerboseLog(true, 'createTunnel response (redacted): '.json_encode($this->shareRedactTunnelResponseForLog($data), JSON_THROW_ON_ERROR));
-        }
+            if ($shareVerbose) {
+                $this->shareVerboseLog(true, 'createTunnel response (redacted): '.json_encode($this->shareRedactTunnelResponseForLog($data), JSON_THROW_ON_ERROR));
+            }
 
-        $publicUrl = (string) ($data['public_url'] ?? '');
-        $localTarget = (string) ($data['local_target'] ?? '');
-        $id = (int) ($data['id'] ?? 0);
-        $status = (string) ($data['status'] ?? '');
-        $subdomain = (string) ($data['subdomain'] ?? '');
-        $edge = is_array($data['edge'] ?? null) ? $data['edge'] : [];
-        $ws = (string) ($edge['websocket_url'] ?? '');
-        $srvOut = isset($data['server']) && is_string($data['server']) && $data['server'] !== '' ? $data['server'] : null;
-        $agentToken = (string) ($data['agent_token'] ?? '');
+            $publicUrl = (string) ($data['public_url'] ?? '');
+            $localTarget = (string) ($data['local_target'] ?? '');
+            $id = (int) ($data['id'] ?? 0);
+            $status = (string) ($data['status'] ?? '');
+            $subdomain = (string) ($data['subdomain'] ?? '');
+            $edge = is_array($data['edge'] ?? null) ? $data['edge'] : [];
+            $ws = (string) ($edge['websocket_url'] ?? '');
+            $srvOut = isset($data['server']) && is_string($data['server']) && $data['server'] !== '' ? $data['server'] : null;
+            $agentToken = (string) ($data['agent_token'] ?? '');
 
-        if ($printUrlOnly) {
-            $this->stdout($publicUrl);
+            if ($printUrlOnly) {
+                $this->stdout($publicUrl);
 
-            return 0;
-        }
+                return 0;
+            }
 
-        $this->stderr('Public URL:  '.$publicUrl);
+            $this->stderr('Public URL:  '.$publicUrl);
         $this->stderr('Local:       '.$localTarget);
         if ($srvOut !== null) {
             $this->stderr('Server:      '.$srvOut);
@@ -1272,7 +1339,100 @@ final class Application
             }
         }
 
-        return 0;
+            return 0;
+        } finally {
+            $this->shareStopBuiltInServer($builtInServerProc);
+        }
+    }
+
+    private function shareDefaultServeDocroot(): string
+    {
+        $cwd = getcwd();
+        if ($cwd === false) {
+            throw new \RuntimeException('Could not determine working directory for --serve.');
+        }
+        $pub = $cwd.\DIRECTORY_SEPARATOR.'public';
+        if (is_dir($pub)) {
+            return $pub;
+        }
+
+        return $cwd;
+    }
+
+    private function shareResolveServeDocroot(string $path): string
+    {
+        $path = trim($path);
+        if ($path === '') {
+            return $this->shareDefaultServeDocroot();
+        }
+        $real = realpath($path);
+
+        return ($real !== false && is_dir($real)) ? $real : throw new \InvalidArgumentException('Not a directory: '.$path);
+    }
+
+    private function shareFindFreeTcpPort(): int
+    {
+        $s = @stream_socket_server('tcp://127.0.0.1:0', $errno, $errstr, STREAM_SERVER_BIND);
+        if ($s === false) {
+            return 8899;
+        }
+        $name = stream_socket_get_name($s, false);
+        fclose($s);
+        if (is_string($name) && preg_match('/:(\d+)$/', $name, $m)) {
+            return (int) $m[1];
+        }
+
+        return 8899;
+    }
+
+    /**
+     * @return resource|object
+     */
+    private function shareStartPhpBuiltInServer(string $docroot, int $port)
+    {
+        $docroot = realpath($docroot) ?: $docroot;
+        if (! is_dir($docroot)) {
+            throw new \InvalidArgumentException('Document root is not a directory: '.$docroot);
+        }
+
+        $php = \PHP_BINARY;
+        $cmd = [$php, '-S', '127.0.0.1:'.$port, '-t', $docroot];
+        $nullDevice = \PHP_OS_FAMILY === 'Windows' ? 'NUL' : '/dev/null';
+        $proc = @proc_open(
+            $cmd,
+            [
+                0 => ['file', $nullDevice, 'r'],
+                1 => ['file', $nullDevice, 'w'],
+                2 => \STDERR,
+            ],
+            $pipes,
+            $docroot
+        );
+        if (! is_resource($proc)) {
+            throw new \RuntimeException('proc_open failed for PHP built-in server');
+        }
+        usleep(200_000);
+        if (! $this->tcpPortAcceptsConnections('127.0.0.1', $port)) {
+            proc_close($proc);
+            throw new \RuntimeException('PHP built-in server did not listen on 127.0.0.1:'.$port);
+        }
+
+        return $proc;
+    }
+
+    /**
+     * @param  resource|object|null  $proc
+     */
+    private function shareStopBuiltInServer(mixed $proc): void
+    {
+        if ($proc === null) {
+            return;
+        }
+        if (is_resource($proc)) {
+            @proc_terminate($proc);
+            @proc_close($proc);
+            $this->stderr('Stopped PHP built-in server.');
+        }
     }
 
     private function shareVerboseLog(bool $verbose, string $message): void
@@ -1375,7 +1535,7 @@ final class Application
 
     private function shareUsageSummary(): string
     {
-        return 'Usage: jetty share [port] [--host=127.0.0.1] [--server=us-west-1] [--site=HOST] [--subdomain=label] [--print-url-only] [--skip-edge] [--verbose|-v|--errors] (alias: http)';
+        return 'Usage: jetty share [port] [--host=127.0.0.1] [--server=us-west-1] [--site=HOST] [--subdomain=label] [--print-url-only] [--skip-edge] [--serve[=DIR]] [--no-detect] [--verbose|-v|--errors] (alias: http)';
     }
 
     private function shareUsageHelp(): string
@@ -1383,8 +1543,10 @@ final class Application
         return $this->shareUsageSummary().<<<'TXT'
 
 
-  port  Optional. If omitted, picks the first common dev port that responds on the upstream host (8000, 3000, 5173, …), or 8000 if none do.
+  port  Optional. If omitted: auto-detect upstream from cwd (Laravel APP_URL, Herd/Valet links, DDEV, Docker Compose, Vite/Next/etc., or .env PORT), else scan common dev ports on 127.0.0.1.
   --host= / --site= / --bind= / --local= / --local-host=  Upstream hostname or IP (default 127.0.0.1).
+  --serve[=DIR]  Start PHP’s built-in server (default docroot: ./public if present, else cwd) and tunnel to it; optional port as first arg.
+  --no-detect    Skip local-dev auto-detection (use plain 127.0.0.1 + port scan). Env: JETTY_SHARE_NO_DETECT=1
   --skip-edge  Register + heartbeats only; no WebSocket forwarding agent.
   --verbose / -v / --errors  Log connection steps, heartbeats, and edge WebSocket frames (stderr).
 
@@ -1483,8 +1645,8 @@ Commands:
   jetty list
   jetty delete <id>
   jetty config set|get|clear|wizard ...
-  jetty share [port] [--host=127.0.0.1] [--server=us-west-1] [--site=HOST] [--subdomain=label] [--print-url-only] [--skip-edge] [--verbose|-v|--errors]
-    (alias: http)  Omit port to auto-pick a responding dev port (8000, 3000, 5173, …) or default 8000
+  jetty share [port] [--host=127.0.0.1] [--server=us-west-1] [--site=HOST] [--subdomain=label] [--print-url-only] [--skip-edge] [--serve[=DIR]] [--no-detect] [--verbose|-v|--errors]
+    (alias: http)  Auto-detect local dev upstream from cwd (see jetty help --advanced), or --serve for a static PHP server
     --server= tunnel/edge id; default from config.  --site= / --host= upstream host (default 127.0.0.1)
 
 Install: composer require jetty/client  (or: composer global require jetty/client — put Composer’s global vendor/bin on PATH)
@@ -1524,6 +1686,14 @@ TXT;
   JETTY_CLI_BOOTSTRAP_FALLBACKS   Comma-separated extra Bridge roots to try
   JETTY_TOKEN                Personal access token from the dashboard
   JETTY_TUNNEL_SERVER        Default tunnel/edge id for jetty share (e.g. us-west-1)
+  JETTY_SHARE_NO_DETECT=1    jetty share: skip local-dev auto upstream detection
+  JETTY_SHARE_UPSTREAM=URL   jetty share: force upstream (e.g. http://127.0.0.1:8080) when tools like PHP Monitor don’t write project files
+
+  jetty share detection (port omitted, detection on): tries in order — JETTY_SHARE_UPSTREAM; Laravel APP_URL;
+    Bedrock APP_URL; herd/valet links; DDEV; Lando; Symfony .symfony.local.yaml; Laravel Sail + Docker Compose
+    published ports; wp-env; Craft nitro.yaml; Vite / Nuxt / Astro / SvelteKit; Next / Remix / Gatsby;
+    devcontainer forwardPorts; Caddyfile; .env PORT / APP_PORT / VITE_PORT / FORWARD_HTTP_PORT; package.json
+    heuristics (Vite, Next, Strapi, Directus, …); MAMP htdocs path; PhpStorm .idea/php.xml. Then 127.0.0.1 port scan.
   JETTY_LOCAL_PHAR_URL       If set (https?…), PHAR jetty update downloads from this URL every time; unset for GitHub
   JETTY_PHAR_PATH            Explicit path to a global PHAR for jetty global-update --phar (default: ~/.local/bin/jetty)
   JETTY_PHAR_RELEASES_REPO   Override GitHub repo for PHAR releases
