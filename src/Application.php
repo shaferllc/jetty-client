@@ -1342,7 +1342,7 @@ final class Application
                 $this->stderr('Edge WS:     '.$ws);
             }
 
-            $suffix = $this->tunnelHostSuffix();
+            $suffix = $this->tunnelHostSuffixFromPublicUrl($publicUrl) ?? $this->tunnelHostSuffix();
             $this->stderr("\nTry HTTP via edge:\n  curl -H \"Host: {$subdomain}.{$suffix}\" http://127.0.0.1:8090/");
             $this->stderr("(adjust :8090 if your ingress listens elsewhere)\n");
 
@@ -1669,6 +1669,33 @@ TXT;
         }
 
         return false;
+    }
+
+    /**
+     * Prefer the suffix from Bridge’s public_url so the curl hint matches the API even when
+     * the shell still has JETTY_TUNNEL_HOST=tunnel… from an old export.
+     *
+     * @return non-empty-string|null
+     */
+    private function tunnelHostSuffixFromPublicUrl(string $publicUrl): ?string
+    {
+        $publicUrl = trim($publicUrl);
+        if ($publicUrl === '') {
+            return null;
+        }
+        $parts = parse_url($publicUrl);
+        if (! is_array($parts) || empty($parts['host']) || ! is_string($parts['host'])) {
+            return null;
+        }
+        $host = $parts['host'];
+        $dot = strpos($host, '.');
+        if ($dot === false || $dot === 0) {
+            return null;
+        }
+
+        $suffix = substr($host, $dot + 1);
+
+        return $suffix !== '' ? $suffix : null;
     }
 
     private function tunnelHostSuffix(): string
