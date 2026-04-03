@@ -2757,6 +2757,15 @@ final class Application
                 $cache = $this->readUpdateNoticeCache($cachePath);
                 $needRefresh = $cache === null || ($now - (int) ($cache['checked_at'] ?? 0)) >= 86400;
 
+                // Invalidate when the cached remote version is no longer
+                // newer than the running version (e.g. user upgraded).
+                if (! $needRefresh && $cache !== null && ! empty($cache['update_available'])) {
+                    $cachedRemote = (string) ($cache['remote_semver'] ?? '');
+                    if ($cachedRemote !== '' && version_compare($cachedRemote, $current) <= 0) {
+                        $needRefresh = true;
+                    }
+                }
+
                 if ($needRefresh) {
                     try {
                         $repo = $this->releasesRepo();
@@ -3293,6 +3302,15 @@ TXT;
         /** @var array{checked_at?: int, remote_tag?: string, remote_semver?: string, update_available?: bool, last_notice_at?: int, last_notified_tag?: string}|null $cache */
         $cache = $this->readUpdateNoticeCache($cachePath);
         $needRefresh = $cache === null || ($now - (int) ($cache['checked_at'] ?? 0)) >= 86400;
+
+        // Invalidate when the cached remote version is no longer newer than
+        // the running version (e.g. user upgraded or cache had a stale pick).
+        if (! $needRefresh && $cache !== null && ! empty($cache['update_available'])) {
+            $cachedRemote = (string) ($cache['remote_semver'] ?? '');
+            if ($cachedRemote !== '' && version_compare($cachedRemote, ApiClient::VERSION) <= 0) {
+                $needRefresh = true;
+            }
+        }
 
         if ($needRefresh) {
             $repo = $this->releasesRepo();

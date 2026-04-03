@@ -144,7 +144,8 @@ final class LocalDevDetector
 
         return self::upstreamFromCliTableUrls(
             'cd '.escapeshellarg($startDir).' && herd links 2>/dev/null',
-            'Laravel Herd (`herd links`)'
+            'Laravel Herd (`herd links`)',
+            $startDir
         );
     }
 
@@ -159,24 +160,41 @@ final class LocalDevDetector
 
         return self::upstreamFromCliTableUrls(
             'cd '.escapeshellarg($startDir).' && valet links 2>/dev/null',
-            'Laravel Valet (`valet links`)'
+            'Laravel Valet (`valet links`)',
+            $startDir
         );
     }
 
     /**
      * @return array{host: string, port: int, hint: string}|null
      */
-    private static function upstreamFromCliTableUrls(string $shellCmd, string $sourceLabel): ?array
+    private static function upstreamFromCliTableUrls(string $shellCmd, string $sourceLabel, string $startDir = ''): ?array
     {
         $out = self::runShellLines($shellCmd);
         if ($out === []) {
             return null;
         }
-        foreach ($out as $line) {
-            if (preg_match('#https?://[^\s]+\.(?:test|localhost|wip)[^\s]*#i', $line, $m)) {
-                $u = rtrim($m[0], ')"\'');
 
-                return self::appUrlToUpstream($u, $sourceLabel);
+        // First pass: find the row whose Path column matches $startDir (or a
+        // parent of it).  Valet/Herd table rows look like:
+        //   | lookout | X | https://lookout.test | /Users/.../lookout | php@8.5 |
+        if ($startDir !== '') {
+            $dir = $startDir;
+            for ($i = 0; $i < 32; $i++) {
+                foreach ($out as $line) {
+                    if (str_contains($line, $dir)
+                        && preg_match('#https?://[^\s]+\.(?:test|localhost|wip)[^\s]*#i', $line, $m)
+                    ) {
+                        $u = rtrim($m[0], ')"\'');
+
+                        return self::appUrlToUpstream($u, $sourceLabel);
+                    }
+                }
+                $parent = dirname($dir);
+                if ($parent === $dir) {
+                    break;
+                }
+                $dir = $parent;
             }
         }
 
@@ -886,14 +904,16 @@ final class LocalDevDetector
         $scheme = strtolower((string) ($p['scheme'] ?? 'http'));
         $explicitPort = isset($p['port']) ? (int) $p['port'] : null;
 
-        // Skip generic loopback hosts so later detectors (Herd/Valet) can
-        // find the real .test domain instead of a bare localhost APP_URL.
+        $port = $explicitPort ?? ($scheme === 'https' ? 443 : 80);
+
+        // When APP_URL is a bare loopback (localhost, 127.0.0.1) without an
+        // explicit port, skip it so later detectors (Herd/Valet) can find the
+        // real .test domain. An explicit port like localhost:8000 is kept
+        // because the user deliberately configured it.
         $lower = strtolower($host);
-        if ($lower === 'localhost' || $lower === '127.0.0.1' || $lower === '::1') {
+        if ($explicitPort === null && ($lower === 'localhost' || $lower === '127.0.0.1' || $lower === '::1')) {
             return null;
         }
-
-        $port = $explicitPort ?? ($scheme === 'https' ? 443 : 80);
 
         if (! self::tcpAccepts($host, $port)) {
             if ($explicitPort === null && $scheme === 'https' && self::tcpAccepts($host, 80)) {
