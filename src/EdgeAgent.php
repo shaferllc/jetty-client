@@ -766,6 +766,12 @@ final class EdgeAgent
             CURLOPT_TIMEOUT => 60,
         ];
 
+        // For local HTTPS (port 443), skip SSL verification — Valet/Herd/local dev certs are self-signed.
+        if ($localPort === 443) {
+            $opts[CURLOPT_SSL_VERIFYPEER] = false;
+            $opts[CURLOPT_SSL_VERIFYHOST] = 0;
+        }
+
         if ($method === 'GET' || $method === 'HEAD') {
             $opts[CURLOPT_HTTPGET] = true;
         } else {

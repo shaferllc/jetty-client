@@ -1438,6 +1438,7 @@ final class Application
         $serveDocroot = null;
         $deleteOnExit = getenv('JETTY_SHARE_DELETE_ON_EXIT') === '1';
         $noResume = false;
+        $forceShare = false;
         $noHealthCheck = false;
         $healthPath = null;
 
@@ -1600,6 +1601,11 @@ final class Application
 
                 continue;
             }
+            if ($arg === '--force' || $arg === '-f') {
+                $forceShare = true;
+
+                continue;
+            }
             if ($arg === '--no-health-check') {
                 $noHealthCheck = true;
 
@@ -1726,6 +1732,7 @@ final class Application
         $id = 0;
         $publicUrl = '';
         $resumedTunnel = false;
+        $tunnelLock = null;
 
         try {
             $resumeId = null;
@@ -1788,6 +1795,32 @@ final class Application
             $publicUrl = (string) ($data['public_url'] ?? '');
             $localTarget = (string) ($data['local_target'] ?? '');
             $id = (int) ($data['id'] ?? 0);
+
+            $tunnelLock = new TunnelLock($id);
+            $lockStatus = $tunnelLock->check();
+            if ($lockStatus['locked'] && ! $forceShare) {
+                $msg = 'Another `jetty share` process (PID '.$lockStatus['pid'].') is already connected to tunnel '.$id.'.';
+                if ($lockStatus['started'] !== null) {
+                    $msg .= ' Started: '.$lockStatus['started'].'.';
+                }
+                $msg .= "\n\nRunning multiple share processes for the same tunnel causes edge session conflicts —";
+                $msg .= "\nHTTP requests may fail with 'tunnel unavailable' even though a CLI appears connected.";
+                $msg .= "\n\nTo fix: kill the other process (`kill ".$lockStatus['pid']."`) or use --force to proceed anyway.";
+                throw new \RuntimeException($msg);
+            }
+            if ($lockStatus['stale']) {
+                TunnelLock::cleanupStaleLocks();
+            }
+            $lockResult = $tunnelLock->acquire();
+            if (! $lockResult['acquired']) {
+                $msg = 'Another `jetty share` process is already connected to tunnel '.$id.'.';
+                if ($lockResult['existing_pid'] !== null) {
+                    $msg .= ' (PID '.$lockResult['existing_pid'].')';
+                }
+                $msg .= "\nUse --force to proceed anyway (not recommended — may cause edge conflicts).";
+                throw new \RuntimeException($msg);
+            }
+
             $shareStartedAt = time();
             EdgeAgent::initHttpActivity($shareStartedAt);
             $telegramBase = [
@@ -1826,6 +1859,10 @@ final class Application
             $pairs[] = ['Status', $this->formatTunnelStatusLabel($status)];
             if ($ws !== '') {
                 $pairs[] = ['Edge WS', $u->dim($ws)];
+            }
+            $invocationCwd = getenv('JETTY_SHARE_INVOCATION_CWD');
+            if (is_string($invocationCwd) && $invocationCwd !== '') {
+                $pairs[] = ['Invoked from', $u->dim($invocationCwd)];
             }
             foreach ($pairs as [$label, $value]) {
                 $u->out('  '.$u->dim(str_pad($label, 12)).' '.$value);
@@ -1894,6 +1931,8 @@ final class Application
                 );
             }
             if (! $printUrlOnly && ! $skipEdge && $ws !== '' && $agentToken !== '') {
+                $this->stderr('');
+                $this->stderr('Connecting edge agent to '.$ws.' …');
                 try {
                     $edgeOutcome = EdgeAgent::run(
                         $ws,
@@ -2001,6 +2040,7 @@ final class Application
             );
             throw $e;
         } finally {
+            $tunnelLock?->release();
             $this->shareStopBuiltInServer($builtInServerProc);
         }
     }
@@ -2346,7 +2386,7 @@ final class Application
 
     private function shareUsageSummary(): string
     {
-        return 'Usage: jetty share [port] [--host=127.0.0.1] [--server=us-west-1] [--site=HOST] [--subdomain=label] [--print-url-only] [--skip-edge] [--serve[=DIR]] [--no-detect] [--no-resume] [--health-path=PATH] [--no-health-check] [--delete-on-exit] [--no-body-rewrite] [--no-js-rewrite] [--no-css-rewrite] [--verbose|-v|--errors] [--debug-agent] (alias: http)';
+        return 'Usage: jetty share [port] [--host=127.0.0.1] [--server=us-west-1] [--site=HOST] [--subdomain=label] [--print-url-only] [--skip-edge] [--serve[=DIR]] [--no-detect] [--no-resume] [--force|-f] [--health-path=PATH] [--no-health-check] [--delete-on-exit] [--no-body-rewrite] [--no-js-rewrite] [--no-css-rewrite] [--verbose|-v|--errors] [--debug-agent] (alias: http)';
     }
 
     private function shareUsageHelp(): string
@@ -2359,6 +2399,7 @@ final class Application
   --serve[=DIR]  Start PHP’s built-in server (default docroot: ./public if present, else cwd) and tunnel to it; optional port as first arg.
   --no-detect    Skip local-dev auto-detection (use plain 127.0.0.1 + port scan). Env: JETTY_SHARE_NO_DETECT=1
   --no-resume    Always register a new tunnel (skip GET /api/tunnels + attach). Env: JETTY_SHARE_NO_RESUME=1
+  --force / -f   Proceed even if another `jetty share` is already running for this tunnel (not recommended — causes edge conflicts).
   --health-path=PATH  Upstream probe path (default /). Env: JETTY_SHARE_HEALTH_PATH
   --no-health-check   Skip GET probe to local upstream before creating the tunnel. Env: JETTY_SHARE_NO_HEALTH_CHECK=1
   --skip-edge  Register + heartbeats only; no WebSocket forwarding agent.
@@ -2460,7 +2501,7 @@ TXT;
         }
 
         $connectT = EdgeAgent::upstreamConnectTimeoutSeconds();
-        curl_setopt_array($ch, [
+        $opts = [
             CURLOPT_RETURNTRANSFER => true,
             CURLOPT_HEADER => true,
             CURLOPT_TIMEOUT => max(15, $connectT + 5),
@@ -2468,7 +2509,15 @@ TXT;
             CURLOPT_FOLLOWLOCATION => true,
             CURLOPT_MAXREDIRS => 3,
             CURLOPT_HTTPGET => true,
-        ]);
+        ];
+
+        // For local HTTPS (port 443), skip SSL verification — Valet/Herd/local dev certs are self-signed.
+        if ($port === 443) {
+            $opts[CURLOPT_SSL_VERIFYPEER] = false;
+            $opts[CURLOPT_SSL_VERIFYHOST] = 0;
+        }
+
+        curl_setopt_array($ch, $opts);
 
         $raw = curl_exec($ch);
         $errno = curl_errno($ch);
@@ -2659,7 +2708,7 @@ Commands:
   jetty domains [--json]   Reserved subdomain labels for your team (from Domains in the app)
   jetty delete <id>
   jetty config set|get|clear|wizard ...
-  jetty share [port] [--host=127.0.0.1] [--server=us-west-1] [--site=HOST] [--subdomain=label] [--print-url-only] [--skip-edge] [--serve[=DIR]] [--no-detect] [--no-resume] [--delete-on-exit] [--no-body-rewrite] [--no-js-rewrite] [--no-css-rewrite] [--verbose|-v|--errors] [--debug-agent]
+  jetty share [port] [--host=127.0.0.1] [--server=us-west-1] [--site=HOST] [--subdomain=label] [--print-url-only] [--skip-edge] [--serve[=DIR]] [--no-detect] [--no-resume] [--force|-f] [--delete-on-exit] [--no-body-rewrite] [--no-js-rewrite] [--no-css-rewrite] [--verbose|-v|--errors] [--debug-agent]
     (alias: http)  Auto-detect local dev upstream from cwd (see jetty help --advanced), or --serve for a static PHP server
     --server= tunnel/edge id; default from config.  --site= / --host= upstream host (default 127.0.0.1)
 
