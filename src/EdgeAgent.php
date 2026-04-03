@@ -378,6 +378,7 @@ final class EdgeAgent
 
         $outHeaders = self::parseResponseHeaders($headerBlock);
         $lookup = TunnelResponseRewriter::tunnelRewriteHostLookup($localHost);
+        TunnelResponseRewriter::debugRewriteRequestContext($requestId, $method, $path, $localHost, $localPort, $headers);
         $outHeaders = TunnelResponseRewriter::rewriteRedirectHeaders($outHeaders, $headers, $lookup);
         $respBody = TunnelResponseRewriter::maybeRewriteBody($respBody, $outHeaders, $headers, $localHost, $rewriteOptions);
 

@@ -1924,7 +1924,7 @@ final class Application
         return $this->shareUsageSummary().<<<'TXT'
 
 
-  port  Optional. If omitted: auto-detect upstream from cwd (Laravel APP_URL, Herd/Valet links, DDEV, Docker Compose, Vite/Next/etc., or .env PORT), else scan common dev ports on 127.0.0.1.
+  port  Optional. If omitted: auto-detect upstream from cwd (Laravel APP_URL, Herd/Valet links, DDEV, Docker Compose, Vite/Next/etc., or .env PORT), else scan common dev ports on 127.0.0.1. With --site=HOSTNAME (not 127.0.0.1), port defaults to 80 first when open (Valet/Herd); pass an explicit port (e.g. 8000) for php artisan serve only.
   --host= / --site= / --bind= / --local= / --local-host=  Upstream hostname or IP (default 127.0.0.1).
   --serve[=DIR]  Start PHP’s built-in server (default docroot: ./public if present, else cwd) and tunnel to it; optional port as first arg.
   --no-detect    Skip local-dev auto-detection (use plain 127.0.0.1 + port scan). Env: JETTY_SHARE_NO_DETECT=1
@@ -1940,6 +1940,20 @@ TXT;
     }
 
     /**
+     * Valet/Herd/DDEV-style hostnames are served on :80; scanning 8000 first picked the wrong process when
+     * another app had a dev server open. Prefer :80 for non-loopback, non-IP hosts when inferring port.
+     */
+    private static function shareUpstreamHostPrefersStandardWebPort(string $localHost): bool
+    {
+        $h = strtolower(trim($localHost));
+        if ($h === '' || $h === 'localhost' || $h === '::1') {
+            return false;
+        }
+
+        return filter_var($h, FILTER_VALIDATE_IP) === false;
+    }
+
+    /**
      * @return array{0: int, 1: string|null} port and optional stderr hint when port was inferred
      */
     private function resolveSharePort(string $localHost, ?int $explicit): array
@@ -1952,10 +1966,20 @@ TXT;
             return [$explicit, null];
         }
 
-        foreach ([8000, 3000, 5173, 8080, 5000, 4000, 8765, 8888] as $p) {
-            if ($this->tcpPortAcceptsConnections($localHost, $p)) {
-                return [$p, 'Local port: '.$p.' (auto — first responding port among common dev servers).'];
+        $common = [8000, 3000, 5173, 8080, 5000, 4000, 8765, 8888];
+        if (self::shareUpstreamHostPrefersStandardWebPort($localHost)) {
+            $common = array_merge([80], $common);
+        }
+
+        foreach ($common as $p) {
+            if (! $this->tcpPortAcceptsConnections($localHost, $p)) {
+                continue;
             }
+            if ($p === 80 && self::shareUpstreamHostPrefersStandardWebPort($localHost)) {
+                return [$p, 'Local port: 80 (auto — hostname looks like Valet/Herd; override with e.g. `jetty share 8000 --site='.$localHost.'` if you use php artisan serve only).'];
+            }
+
+            return [$p, 'Local port: '.$p.' (auto — first responding port among common dev servers).'];
         }
 
         return [8000, 'Local port: 8000 (auto — no common dev port responded; pass a port if yours is different).'];
@@ -2103,6 +2127,7 @@ TXT;
   JETTY_SHARE_UPSTREAM=URL   jetty share: force upstream (e.g. http://127.0.0.1:8080) when tools like PHP Monitor don’t write project files
   JETTY_SHARE_DELETE_ON_EXIT=1  jetty share: delete tunnel via API when the CLI session ends (default: leave registered)
   JETTY_SHARE_NO_LOCATION_REWRITE=1  jetty share: do not rewrite Location / X-Inertia-Location / Refresh to the tunnel host
+  JETTY_SHARE_DEBUG_REWRITE=1   jetty share: log tunnel URL rewrite decisions to stderr (see README)
   JETTY_SHARE_REWRITE_HOSTS=h1,h2  Extra canonical hosts to rewrite (comma-separated), beyond upstream + APP_URL discovery
   JETTY_SHARE_NO_BODY_REWRITE=1   Disable HTML/CSS/JS body URL rewriting (default: body rewrite on)
   JETTY_SHARE_BODY_REWRITE=0      Same as NO_BODY_REWRITE

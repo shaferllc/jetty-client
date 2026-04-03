@@ -18,6 +18,33 @@ final class TunnelResponseRewriter
     private const DATA_URL_ATTRS = ['data-url', 'data-href', 'data-src', 'data-action'];
 
     /**
+     * Logs one line per tunneled HTTP request when debug is enabled (env JETTY_SHARE_DEBUG_REWRITE=1).
+     *
+     * @param  array<string, string>  $requestHeaders  Browser → edge request (includes Host)
+     */
+    public static function debugRewriteRequestContext(
+        string $requestId,
+        string $method,
+        string $path,
+        string $localHost,
+        int $localPort,
+        array $requestHeaders,
+    ): void {
+        if (! self::debugRewriteEnabled()) {
+            return;
+        }
+        $tunnelHost = self::requestHostLower($requestHeaders);
+        self::debugRewriteLine(
+            'http '.$method.' '.$path
+            .' request_id='.($requestId !== '' ? $requestId : '(none)')
+            .' tunnel_Host='.$tunnelHost
+            .' upstream=http://'.$localHost.':'.$localPort
+        );
+        $lookupPreview = self::debugRewriteLookupPreview($localHost);
+        self::debugRewriteLine('rewrite_host_lookup: '.$lookupPreview);
+    }
+
+    /**
      * @param  array<string, string>  $responseHeaders
      * @param  array<string, string>  $requestHeaders
      * @param  array<string, true>  $rewriteHostsLookup
@@ -29,11 +56,19 @@ final class TunnelResponseRewriter
         array $rewriteHostsLookup,
     ): array {
         if (getenv('JETTY_SHARE_NO_LOCATION_REWRITE') === '1') {
+            if (self::debugRewriteEnabled()) {
+                self::debugRewriteLine('redirect_headers: skipped (JETTY_SHARE_NO_LOCATION_REWRITE=1)');
+            }
+
             return $responseHeaders;
         }
 
         $publicHost = self::requestHostLower($requestHeaders);
         if ($publicHost === '') {
+            if (self::debugRewriteEnabled()) {
+                self::debugRewriteLine('redirect_headers: skipped (no tunnel Host on request)');
+            }
+
             return $responseHeaders;
         }
 
@@ -42,13 +77,19 @@ final class TunnelResponseRewriter
                 if (strcasecmp($name, $headerName) !== 0) {
                     continue;
                 }
+                $before = (string) $value;
                 if (strcasecmp($headerName, 'Refresh') === 0) {
-                    $rewritten = self::rewriteRefreshHeaderValue((string) $value, $rewriteHostsLookup, $publicHost);
+                    $rewritten = self::rewriteRefreshHeaderValue((string) $value, $rewriteHostsLookup, $publicHost, true);
                 } else {
-                    $rewritten = self::rewriteAbsoluteUrlToTunnel((string) $value, $rewriteHostsLookup, $publicHost);
+                    $rewritten = self::rewriteAbsoluteUrlToTunnel((string) $value, $rewriteHostsLookup, $publicHost, true);
                 }
                 if ($rewritten !== null) {
                     $responseHeaders[$name] = $rewritten;
+                    if (self::debugRewriteEnabled()) {
+                        self::debugRewriteLine($headerName.': '.$before.' -> '.$rewritten);
+                    }
+                } elseif (self::debugRewriteEnabled()) {
+                    self::debugRewriteLine($headerName.': unchanged '.self::truncateForLog($before).' (not rewritten — see prior absolute_url lines)');
                 }
             }
         }
@@ -59,7 +100,7 @@ final class TunnelResponseRewriter
     /**
      * @param  array<string, true>  $rewriteHostsLookup
      */
-    public static function rewriteRefreshHeaderValue(string $value, array $rewriteHostsLookup, string $tunnelHostLower): ?string
+    public static function rewriteRefreshHeaderValue(string $value, array $rewriteHostsLookup, string $tunnelHostLower, bool $debugRedirect = false): ?string
     {
         $value = trim($value);
         if ($value === '') {
@@ -72,7 +113,7 @@ final class TunnelResponseRewriter
             return null;
         }
         $urlPart = trim($m[1], " \t\"'");
-        $rewritten = self::rewriteAbsoluteUrlToTunnel($urlPart, $rewriteHostsLookup, $tunnelHostLower);
+        $rewritten = self::rewriteAbsoluteUrlToTunnel($urlPart, $rewriteHostsLookup, $tunnelHostLower, $debugRedirect);
         if ($rewritten === null) {
             return null;
         }
@@ -161,20 +202,37 @@ final class TunnelResponseRewriter
      * If the URL is absolute and points at a known host, rewrite scheme/host to the tunnel.
      *
      * @param  array<string, true>  $rewriteHostsLookup
+     * @param  bool  $debugRedirect  When true, log redirect decisions to stderr if JETTY_SHARE_DEBUG_REWRITE=1
      */
-    public static function rewriteAbsoluteUrlToTunnel(string $value, array $rewriteHostsLookup, string $tunnelHostLower): ?string
+    public static function rewriteAbsoluteUrlToTunnel(string $value, array $rewriteHostsLookup, string $tunnelHostLower, bool $debugRedirect = false): ?string
     {
         $value = trim($value);
         if ($value === '' || ($value[0] ?? '') === '/') {
+            if ($debugRedirect && self::debugRewriteEnabled()) {
+                self::debugRewriteLine('absolute_url: skip empty or root-relative '.self::truncateForLog($value));
+            }
+
             return null;
         }
 
         $parts = parse_url($value);
         if (! is_array($parts) || ! isset($parts['host'])) {
+            if ($debugRedirect && self::debugRewriteEnabled()) {
+                self::debugRewriteLine('absolute_url: skip parse_url missing host '.self::truncateForLog($value));
+            }
+
             return null;
         }
 
-        if (! isset($rewriteHostsLookup[strtolower((string) $parts['host'])])) {
+        $hostLower = strtolower((string) $parts['host']);
+        if (! isset($rewriteHostsLookup[$hostLower])) {
+            if ($debugRedirect && self::debugRewriteEnabled()) {
+                self::debugRewriteLine(
+                    'absolute_url: host "'.$hostLower.'" not in rewrite lookup —'
+                    .' add JETTY_SHARE_REWRITE_HOSTS='.$hostLower.' if this URL should become the current tunnel Host ('.$tunnelHostLower.')'
+                );
+            }
+
             return null;
         }
 
@@ -471,5 +529,41 @@ final class TunnelResponseRewriter
         }
 
         return '';
+    }
+
+    private static function debugRewriteEnabled(): bool
+    {
+        return getenv('JETTY_SHARE_DEBUG_REWRITE') === '1';
+    }
+
+    private static function debugRewriteLine(string $line): void
+    {
+        $msg = '[jetty share rewrite] '.$line."\n";
+        if (\defined('STDERR') && \is_resource(STDERR)) {
+            @fwrite(STDERR, $msg);
+        } else {
+            error_log(rtrim($msg));
+        }
+    }
+
+    private static function truncateForLog(string $s, int $max = 240): string
+    {
+        if (strlen($s) <= $max) {
+            return $s;
+        }
+
+        return substr($s, 0, $max).'…';
+    }
+
+    private static function debugRewriteLookupPreview(string $localHost): string
+    {
+        $lookup = self::tunnelRewriteHostLookup($localHost);
+        $hosts = array_keys($lookup);
+        sort($hosts);
+        $n = count($hosts);
+        $preview = array_slice($hosts, 0, 24);
+        $tail = $n > count($preview) ? ' … (+'.($n - count($preview)).' more)' : '';
+
+        return $n.' host(s): '.implode(', ', $preview).$tail;
     }
 }

@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# Run the Jetty CLI from this package without building a PHAR (requires: composer install).
+set -euo pipefail
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+exec php "${ROOT}/bin/jetty" "$@"

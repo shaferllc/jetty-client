@@ -8,14 +8,22 @@ Composer package **`jetty/client`**: PHP build of the **`jetty`** CLI for the [J
 
 ## Run from source (local testing, no publish)
 
-From this directory after dependencies are installed, the launcher resolves `vendor/autoload.php` in the package root—no Packagist release required.
+No PHAR build: install dependencies once, then run **`./jetty`** (wrapper) or **`php bin/jetty`**. The launcher loads **`vendor/autoload.php`** from this package first—no Packagist release required.
 
 ```bash
 cd jetty-client
 composer install
-php bin/jetty version
+./jetty version
+# same: php bin/jetty version
 # or: ./vendor/bin/jetty version   (Composer symlink to bin/jetty)
 # or: composer run jetty -- version
+```
+
+Add this directory to your **`PATH`** to type **`jetty`** from anywhere (optional):
+
+```bash
+export PATH="$HOME/Projects/Apps/jetty/jetty-client:$PATH"
+jetty version
 ```
 
 Pass CLI args after `--`:
@@ -115,6 +123,10 @@ The edge WebSocket agent rewrites responses so the **browser stays on `https://{
 - Extra hosts from **`JETTY_SHARE_REWRITE_HOSTS`** (comma-separated), e.g. **`myapp.test,www.myapp.test`**.
 
 Opt out of header rewriting: **`JETTY_SHARE_NO_LOCATION_REWRITE=1`**.
+
+**Debugging redirects (local):** set **`JETTY_SHARE_DEBUG_REWRITE=1`** in the environment where you run **`jetty share`**. The CLI prints **`[jetty share rewrite]`** lines to **stderr** for each request through the tunnel: the browser **`Host`** (tunnel hostname), the **upstream** URL, a short preview of the **rewrite-host lookup**, each **`Location` / `X-Inertia-Location` / `Refresh`** value (before → after when rewritten), and **`absolute_url:`** lines when a URL was **not** rewritten (e.g. host not in the lookup). Use this to see whether the app is emitting a **`https://…tunnels…`** URL from an **old tunnel label** or another host: add that hostname to **`JETTY_SHARE_REWRITE_HOSTS`** so it can be rewritten to the **current** tunnel **`Host`**.
+
+**Test without the public tunnel:** run the PHPUnit suite (**`composer test`** in this package) for **`TunnelResponseRewriter`**. For your app alone, **`curl -sI http://127.0.0.1:PORT/path`** (or your Valet host) shows **`Location`** as the upstream returns it **before** any Jetty rewriting.
 
 **Response bodies (default on):** HTML **`href` / `src` / `action` / `srcset` / `meta refresh`**, **`url()`** inside CSS (inline **`style`** and **`<style>`**), and **quoted absolute URLs** in inline **`<script>`** and standalone **`application/javascript`** responses. Standalone JSON and binary content are not rewritten.
 
