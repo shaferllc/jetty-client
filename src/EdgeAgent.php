@@ -301,14 +301,12 @@ final class EdgeAgent
         $response = curl_exec($ch);
         if ($response === false) {
             $err = curl_error($ch);
-            curl_close($ch);
 
             return self::errorResponse($requestId, 502, $err);
         }
 
         $status = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
         $headerSize = (int) curl_getinfo($ch, CURLINFO_HEADER_SIZE);
-        curl_close($ch);
 
         $headerBlock = substr($response, 0, $headerSize);
         $respBody = substr($response, $headerSize);

@@ -165,8 +165,6 @@ final class TelegramNotifier
             curl_exec($ch);
         } catch (\Throwable) {
             // Never break the CLI on notify failures
-        } finally {
-            curl_close($ch);
         }
     }
 }
