@@ -67,6 +67,21 @@ final class EdgeAgent
      * Seconds to wait after each successful WebSocket ping before the next ping.
      * Override with {@code JETTY_SHARE_WS_PING_INTERVAL} (2–120). Ignored when {@code JETTY_SHARE_NO_WS_PING=1}.
      */
+    /**
+     * Seconds for {@see CURLOPT_CONNECTTIMEOUT} to the local upstream (not total transfer time).
+     * Env: {@code JETTY_SHARE_UPSTREAM_CONNECT_TIMEOUT} (1–120), default {@code 10}.
+     */
+    public static function upstreamConnectTimeoutSeconds(): int
+    {
+        $raw = getenv('JETTY_SHARE_UPSTREAM_CONNECT_TIMEOUT');
+        if (! is_string($raw) || trim($raw) === '' || ! is_numeric(trim($raw))) {
+            return 10;
+        }
+        $v = (int) trim($raw);
+
+        return max(1, min(120, $v));
+    }
+
     public static function websocketPingIntervalSeconds(): float
     {
         if (getenv('JETTY_SHARE_NO_WS_PING') === '1') {
@@ -632,6 +647,20 @@ final class EdgeAgent
             'edge_headers_redacted' => EdgeAgentDebug::redactSensitiveRequestHeaders($headers),
         ]);
 
+        $hostPolicy = ShareUpstreamHostPolicy::fromEnvironment();
+        if (! $hostPolicy->allows($localHost)) {
+            self::agentEmit($agentDebug, 'http_upstream_error', [
+                'request_id' => $requestId,
+                'stage' => 'upstream_host_policy',
+                'message' => $hostPolicy->denyMessage($localHost),
+            ]);
+
+            return [
+                'response' => self::errorResponse($requestId, 502, 'upstream host not allowed by JETTY_SHARE_UPSTREAM_ALLOW_HOSTS'),
+                'sample' => self::samplePayload($method, $path, $query, $headers, 502, strlen($bodyB64), 0),
+            ];
+        }
+
         $rawBody = base64_decode($bodyB64, true);
         if ($rawBody === false) {
             self::agentEmit($agentDebug, 'http_upstream_error', [
@@ -683,6 +712,7 @@ final class EdgeAgent
             CURLOPT_HTTPHEADER => $curlHeaders,
             CURLOPT_RETURNTRANSFER => true,
             CURLOPT_HEADER => true,
+            CURLOPT_CONNECTTIMEOUT => self::upstreamConnectTimeoutSeconds(),
             CURLOPT_TIMEOUT => 60,
         ];
 

@@ -30,6 +30,16 @@ final class TunnelResponseRewriter
         int $localPort,
         array $requestHeaders,
     ): void {
+        // #region agent log
+        $ge = getenv('JETTY_SHARE_DEBUG_REWRITE');
+        self::agentDebugNdjson('H1', 'TunnelResponseRewriter::debugRewriteRequestContext', [
+            'request_id' => $requestId,
+            'getenv_JETTY_SHARE_DEBUG_REWRITE' => $ge === false ? '(false)' : $ge,
+            'debugRewriteEnabled' => self::debugRewriteEnabled(),
+            'method' => $method,
+            'path' => $path,
+        ]);
+        // #endregion
         if (! self::debugRewriteEnabled()) {
             return;
         }
@@ -64,6 +74,31 @@ final class TunnelResponseRewriter
         }
 
         $publicHost = self::requestHostLower($requestHeaders);
+        // #region agent log
+        $locForLog = '';
+        foreach ($responseHeaders as $nk => $nv) {
+            if (strcasecmp((string) $nk, 'Location') === 0) {
+                $locForLog = (string) $nv;
+                break;
+            }
+        }
+        $locHost = '';
+        if ($locForLog !== '') {
+            $pu = parse_url($locForLog);
+            $locHost = is_array($pu) && isset($pu['host']) ? strtolower((string) $pu['host']) : '';
+        }
+        $lookupKeys = array_keys($rewriteHostsLookup);
+        sort($lookupKeys);
+        self::agentDebugNdjson('H2-H4-H5', 'TunnelResponseRewriter::rewriteRedirectHeaders:pre', [
+            'publicHost' => $publicHost,
+            'no_location_rewrite' => getenv('JETTY_SHARE_NO_LOCATION_REWRITE') === '1',
+            'lookup_size' => count($rewriteHostsLookup),
+            'lookup_host_sample' => array_slice($lookupKeys, 0, 12),
+            'location_host' => $locHost,
+            'location_in_lookup' => $locHost !== '' && isset($rewriteHostsLookup[$locHost]),
+            'location_preview' => self::truncateForLog($locForLog, 120),
+        ]);
+        // #endregion
         if ($publicHost === '') {
             if (self::debugRewriteEnabled()) {
                 self::debugRewriteLine('redirect_headers: skipped (no tunnel Host on request)');
@@ -185,8 +220,31 @@ final class TunnelResponseRewriter
                 $add(trim($part));
             }
         }
-        foreach (LocalDevDetector::appUrlHostsForTunnelRewrite() as $h) {
-            $add($h);
+        $appUrlRoots = [];
+        $projectRoot = getenv('JETTY_SHARE_PROJECT_ROOT');
+        if (is_string($projectRoot) && trim($projectRoot) !== '') {
+            $appUrlRoots[] = trim($projectRoot);
+        }
+        $cwd = getcwd();
+        if ($cwd !== false && $cwd !== '') {
+            $appUrlRoots[] = $cwd;
+        }
+        $seenRoot = [];
+        foreach ($appUrlRoots as $root) {
+            $root = trim($root);
+            if ($root === '') {
+                continue;
+            }
+            $rp = realpath($root);
+            $key = $rp !== false ? $rp : $root;
+            if (isset($seenRoot[$key])) {
+                continue;
+            }
+            $seenRoot[$key] = true;
+            $dirForEnv = $rp !== false ? $rp : $root;
+            foreach (LocalDevDetector::appUrlHostsForTunnelRewrite($dirForEnv) as $h) {
+                $add($h);
+            }
         }
         $appUrlEnv = getenv('APP_URL');
         if (is_string($appUrlEnv) && $appUrlEnv !== '') {
@@ -624,5 +682,23 @@ final class TunnelResponseRewriter
         $tail = $n > count($preview) ? ' … (+'.($n - count($preview)).' more)' : '';
 
         return $n.' host(s): '.implode(', ', $preview).$tail;
+    }
+
+    /**
+     * @param  array<string, mixed>  $data
+     */
+    private static function agentDebugNdjson(string $hypothesisId, string $location, array $data): void
+    {
+        // #region agent log
+        $payload = [
+            'sessionId' => '96e82a',
+            'hypothesisId' => $hypothesisId,
+            'location' => $location,
+            'message' => 'jetty share debug',
+            'data' => $data,
+            'timestamp' => (int) round(microtime(true) * 1000),
+        ];
+        @file_put_contents('/Users/tomshafer/Projects/Apps/dply/.cursor/debug-96e82a.log', json_encode($payload, JSON_UNESCAPED_SLASHES)."\n", FILE_APPEND | LOCK_EX);
+        // #endregion
     }
 }

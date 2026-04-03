@@ -122,6 +122,14 @@ final class Config
     }
 
     /**
+     * Absolute path to the nearest jetty.config.json / .jetty.json walking up from cwd, if any.
+     */
+    public static function nearestProjectJettyConfigPath(): ?string
+    {
+        return self::findProjectConfigPathWalkingUp();
+    }
+
+    /**
      * @deprecated Use resolve() which loads JSON + env.
      */
     public static function fromEnv(): self

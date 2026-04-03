@@ -99,6 +99,11 @@ Prefer a **JSON config file** so you do not need shell exports. See `composer sh
 
 Optional fallbacks: `JETTY_API_URL`, `JETTY_SERVER`, `JETTY_TOKEN`, or flags `--api-url` / `--token`.
 
+### Upstream host allowlist and connect timeout (optional)
+
+- **`JETTY_SHARE_UPSTREAM_ALLOW_HOSTS`** — comma-separated allowlist for the local upstream host used by `jetty share` / the edge agent (checked at share start and on each proxied request). Literals (`127.0.0.1`, `localhost`, `beacon.test`) and suffix wildcards (`*.test` matches `foo.test` and `a.b.test`). When unset or empty, all hosts are allowed.
+- **`JETTY_SHARE_UPSTREAM_CONNECT_TIMEOUT`** — upstream TCP connect timeout in seconds for health checks and proxied HTTP (default `10`, clamped `1`–`120`).
+
 ### Telegram notifications (optional)
 
 Set **`JETTY_TELEGRAM_BOT_TOKEN`** (from [@BotFather](https://t.me/BotFather)) and **`JETTY_TELEGRAM_CHAT_ID`** (your user id, group id, or channel id) to receive HTML alerts when:

@@ -1433,6 +1433,18 @@ final class Application
         $healthPath = null;
 
         $shareFile = Config::readProjectShareOverrides();
+        $shareProjectRoot = $shareFile['project_root'] ?? null;
+        if (getenv('JETTY_SHARE_PROJECT_ROOT') === false && is_string($shareProjectRoot) && trim($shareProjectRoot) !== '') {
+            $root = trim($shareProjectRoot);
+            $cfgPath = Config::nearestProjectJettyConfigPath();
+            if ($cfgPath !== null && $root !== '' && ! preg_match('#^(/|[A-Za-z]:[\\\\/])#', $root)) {
+                $root = dirname($cfgPath).\DIRECTORY_SEPARATOR.$root;
+            }
+            $rp = realpath($root);
+            if ($rp !== false && is_dir($rp)) {
+                putenv('JETTY_SHARE_PROJECT_ROOT='.$rp);
+            }
+        }
         $shareDebugAgent = filter_var($shareFile['debug_agent'] ?? false, FILTER_VALIDATE_BOOLEAN);
         if (EdgeAgentDebug::enabledFromEnvironment()) {
             $shareDebugAgent = true;
@@ -1683,6 +1695,11 @@ final class Application
             if (is_string($envPath) && trim($envPath) !== '') {
                 $healthPathResolved = '/'.ltrim(trim($envPath), '/');
             }
+        }
+
+        $upstreamHostPolicy = ShareUpstreamHostPolicy::fromEnvironment();
+        if (! $upstreamHostPolicy->allows($localHost)) {
+            throw new \InvalidArgumentException($upstreamHostPolicy->denyMessage($localHost)."\n".$this->shareUsageHelp());
         }
 
         $this->shareProbeUpstreamHealth($localHost, $port, $healthPathResolved, $noHealthCheck);
@@ -2387,11 +2404,12 @@ TXT;
             throw new \RuntimeException('upstream health check: curl_init failed for '.$url);
         }
 
+        $connectT = EdgeAgent::upstreamConnectTimeoutSeconds();
         curl_setopt_array($ch, [
             CURLOPT_RETURNTRANSFER => true,
             CURLOPT_HEADER => true,
-            CURLOPT_TIMEOUT => 5,
-            CURLOPT_CONNECTTIMEOUT => 3,
+            CURLOPT_TIMEOUT => max(15, $connectT + 5),
+            CURLOPT_CONNECTTIMEOUT => $connectT,
             CURLOPT_FOLLOWLOCATION => true,
             CURLOPT_MAXREDIRS => 3,
             CURLOPT_HTTPGET => true,

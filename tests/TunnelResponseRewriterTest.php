@@ -166,4 +166,26 @@ final class TunnelResponseRewriterTest extends TestCase
             }
         }
     }
+
+    public function test_tunnel_rewrite_host_lookup_merges_jetty_share_project_root_env(): void
+    {
+        $prev = getenv('JETTY_SHARE_PROJECT_ROOT');
+        $tmpdir = sys_get_temp_dir().'/jetty-tr-'.uniqid('', true);
+        mkdir($tmpdir, 0700, true);
+        file_put_contents($tmpdir.'/.env', "APP_URL=https://fixture-from-project-root.test\n");
+
+        putenv('JETTY_SHARE_PROJECT_ROOT='.$tmpdir);
+        try {
+            $lookup = TunnelResponseRewriter::tunnelRewriteHostLookup('127.0.0.1');
+            $this->assertArrayHasKey('fixture-from-project-root.test', $lookup);
+        } finally {
+            if ($prev === false) {
+                putenv('JETTY_SHARE_PROJECT_ROOT');
+            } else {
+                putenv('JETTY_SHARE_PROJECT_ROOT='.$prev);
+            }
+            unlink($tmpdir.'/.env');
+            rmdir($tmpdir);
+        }
+    }
 }
