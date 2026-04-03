@@ -2648,50 +2648,38 @@ TXT;
   Values in the file override JETTY_* env for keys that are set. CLI flags override everything.
 
 ── Advanced: environment variables (optional) ──
-  JETTY_API_URL              Base URL for API calls (highest precedence)
-  JETTY_REGION               Same as --region= (regional Bridge host)
-  JETTY_BRIDGE_URL           Override Bridge root when JETTY_API_URL unset
-  JETTY_ONBOARD_BRIDGE_URL   Same, for onboarding only
-  JETTY_ALLOW_LOCAL_BRIDGE=1 Allow localhost/127.0.0.1 in saved api_url and bootstrap candidates (local Bridge dev)
-  JETTY_CLI_LOCAL_URL        Optional extra bootstrap URL
-  JETTY_CLI_DEV_URL          Optional extra bootstrap URL
-  JETTY_CLI_BOOTSTRAP_FALLBACKS   Comma-separated extra Bridge roots to try
-  JETTY_TOKEN                Personal access token from the dashboard
-  JETTY_TUNNEL_SERVER        Default tunnel/edge id for jetty share (e.g. us-west-1)
-  JETTY_SHARE_NO_DETECT=1    jetty share: skip local-dev auto upstream detection
-  JETTY_SHARE_UPSTREAM=URL   jetty share: force upstream (e.g. http://127.0.0.1:8080) when tools like PHP Monitor don’t write project files
-  JETTY_SHARE_DELETE_ON_EXIT=1  jetty share: delete tunnel via API when the CLI session ends (default: leave registered)
-  JETTY_SHARE_NO_RESUME=1    jetty share: always POST a new tunnel (do not resume via GET + attach)
-  JETTY_SHARE_HEALTH_PATH=/path  jetty share: HTTP GET path for upstream health check (default /)
-  JETTY_SHARE_NO_HEALTH_CHECK=1  jetty share: skip upstream GET probe before registering tunnel
-  JETTY_SHARE_CAPTURE_SAMPLES=0   jetty share: do not POST request summaries to the Bridge (default: on)
-  JETTY_REPLAY_ALLOW_UNSAFE=1     jetty replay: allow non-GET methods (can duplicate side effects)
-  JETTY_SHARE_NO_LOCATION_REWRITE=1  jetty share: do not rewrite Location / X-Inertia-Location / Refresh to the tunnel host
-  JETTY_SHARE_DEBUG_REWRITE=1   jetty share: log tunnel URL rewrite decisions to stderr (see README)
-  JETTY_SHARE_DEBUG_AGENT=1     jetty share: structured agent events on stderr (lines prefixed [jetty:agent-debug]; JSON per line)
-  JETTY_SHARE_DEBUG_AGENT_HEARTBEATS=1  With DEBUG_AGENT: also emit heartbeat_ok / heartbeat_error every Bridge heartbeat
-  JETTY_SHARE_REWRITE_HOSTS=h1,h2  Extra canonical hosts to rewrite (comma-separated), beyond upstream + APP_URL discovery
-  JETTY_SHARE_NO_BODY_REWRITE=1   Disable HTML/CSS/JS body URL rewriting (default: body rewrite on)
-  JETTY_SHARE_BODY_REWRITE=0      Same as NO_BODY_REWRITE
-  JETTY_SHARE_NO_JS_REWRITE=1     Disable JS string URL rewriting only (default: on when body rewrite on)
-  JETTY_SHARE_NO_CSS_REWRITE=1    Disable CSS url() rewriting only (default: on when body rewrite on)
-  JETTY_SHARE_BODY_REWRITE_MAX_BYTES  Max response body size to rewrite (default 4194304)
-  JETTY_SHARE_NO_WS_PING=1      jetty share: disable periodic WebSocket ping (not recommended; proxies may idle-close /agent)
-  JETTY_SHARE_IDLE_DISABLE=1    jetty share: disable idle prompt + auto-remove (see idle vars below)
-  JETTY_SHARE_IDLE_PROMPT_MINUTES  After this many minutes without HTTP (default 120), prompt to keep or remove; 0 disables
-  JETTY_SHARE_IDLE_GRACE_MINUTES   After the prompt, minutes to type keep or get traffic (default 60)
+  Prefer JSON config (above). Precedence: CLI flags → env → config file.
 
-  jetty share detection (port omitted, detection on): tries in order — JETTY_SHARE_UPSTREAM; Laravel APP_URL;
-    Bedrock APP_URL; herd/valet links; DDEV; Lando; Symfony .symfony.local.yaml; Laravel Sail + Docker Compose
-    published ports; wp-env; Craft nitro.yaml; Vite / Nuxt / Astro / SvelteKit; Next / Remix / Gatsby;
-    devcontainer forwardPorts; Caddyfile; .env PORT / APP_PORT / VITE_PORT / FORWARD_HTTP_PORT; package.json
-    heuristics (Vite, Next, Strapi, Directus, …); MAMP htdocs path; PhpStorm .idea/php.xml. Then 127.0.0.1 port scan.
-  JETTY_LOCAL_PHAR_URL       If set (https?…), PHAR jetty update downloads from this URL every time; unset for GitHub
-  JETTY_PHAR_PATH            Explicit path to a global PHAR for jetty global-update --phar (default: ~/.local/bin/jetty)
-  JETTY_PHAR_RELEASES_REPO   Override GitHub repo for PHAR releases
-  JETTY_CLI_GITHUB_REPO      owner/repo or URL for PHAR / installer resolution
-  JETTY_PHAR_GITHUB_TOKEN    Private repos / rate limits
-  JETTY_SKIP_UPDATE_NOTICE=1  Suppress periodic “update available” line after commands
+  API / Bridge (CLI)
+  JETTY_API_URL              API base URL (preferred)
+  JETTY_SERVER               Legacy: host or https:// URL if JETTY_API_URL unset
+  JETTY_BRIDGE_URL           Bridge root if neither API_URL nor SERVER set
+  JETTY_ONBOARD_BRIDGE_URL   Same (curl|bash installer sets this)
+  JETTY_REGION               Same as --region=
+  JETTY_TOKEN                Dashboard personal access token
+  JETTY_TUNNEL_SERVER        Default --server= for jetty share (edge region id)
+  JETTY_CONFIG               Path to JSON config file
+  JETTY_ALLOW_LOCAL_BRIDGE=1 Allow localhost Bridge in saved api_url / bootstrap
+  JETTY_CLI_LOCAL_URL        Optional extra bootstrap URL (legacy alias: JETTY_CLI_DEV_URL)
+  JETTY_CLI_BOOTSTRAP_FALLBACKS  Comma-separated extra Bridge roots
+
+  jetty share — dozens of optional JETTY_SHARE_* toggles (upstream, resume, health, rewrite, body/js/css,
+  edge reconnect, WebSocket ping, idle prompt, request samples, debug). Full list and defaults: jetty-client/README.md
+  Common: JETTY_SHARE_UPSTREAM=URL  JETTY_SHARE_REWRITE_HOSTS=h1,h2  JETTY_SHARE_NO_DETECT=1
+  Debug stderr: JETTY_SHARE_DEBUG_REWRITE=1  JETTY_SHARE_DEBUG_AGENT=1
+  Opt out of extras: JETTY_SHARE_CAPTURE_SAMPLES=0  JETTY_SHARE_TELEMETRY=0
+
+  jetty replay
+  JETTY_REPLAY_ALLOW_UNSAFE=1  Allow non-GET replay (dangerous)
+
+  PHAR / self-update
+  JETTY_PHAR_PATH            Global PHAR path for jetty global-update --phar
+  JETTY_CLI_GITHUB_REPO      owner/repo or URL; JETTY_PHAR_RELEASES_REPO is an alternate name for a URL
+  JETTY_PHAR_GITHUB_TOKEN    Private GitHub / rate limits
+  JETTY_LOCAL_PHAR_URL       Force PHAR downloads from this URL (else GitHub)
+  JETTY_SKIP_UPDATE_NOTICE=1 Suppress “update available” hint after commands
+
+  Bridge app (.env): see .env.example and config/jetty.php (tunnel host, edge, plans, Telegram, …).
 
 TXT;
     }

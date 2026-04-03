@@ -367,14 +367,18 @@ final class EdgeAgent
 
                     async(function () use ($conn, $state, $v, $verbose, $agentDebug): void {
                         while ($state->running) {
-                            delay(25.0);
                             if (! $state->running) {
                                 break;
                             }
                             if (getenv('JETTY_SHARE_NO_WS_PING') === '1') {
+                                delay(25.0);
+
                                 continue;
                             }
                             try {
+                                // Ping as soon as we are registered, then every 25s. A long initial
+                                // delay meant proxies/nginx could idle-close the socket before the first
+                                // ping — connected UI but no HTTP forwarding (edge dropped the session).
                                 $conn->ping();
                                 if ($verbose) {
                                     $v('websocket ping sent');
@@ -388,6 +392,7 @@ final class EdgeAgent
 
                                 break;
                             }
+                            delay(25.0);
                         }
                     })->ignore();
 

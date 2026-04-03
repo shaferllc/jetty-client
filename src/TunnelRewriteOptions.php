@@ -25,16 +25,14 @@ final class TunnelRewriteOptions
      */
     public static function fromEnvironment(): self
     {
-        $bodyOff = getenv('JETTY_SHARE_NO_BODY_REWRITE') === '1'
-            || getenv('JETTY_SHARE_BODY_REWRITE') === '0';
+        // Prefer JETTY_SHARE_NO_*=1; JETTY_SHARE_*_REWRITE=0 kept for backward compatibility.
+        $bodyOff = self::envShareDisabled('JETTY_SHARE_NO_BODY_REWRITE', 'JETTY_SHARE_BODY_REWRITE');
         $bodyOn = ! $bodyOff;
 
-        $jsOff = getenv('JETTY_SHARE_NO_JS_REWRITE') === '1'
-            || getenv('JETTY_SHARE_JS_REWRITE') === '0';
+        $jsOff = self::envShareDisabled('JETTY_SHARE_NO_JS_REWRITE', 'JETTY_SHARE_JS_REWRITE');
         $jsOn = $bodyOn && ! $jsOff;
 
-        $cssOff = getenv('JETTY_SHARE_NO_CSS_REWRITE') === '1'
-            || getenv('JETTY_SHARE_CSS_REWRITE') === '0';
+        $cssOff = self::envShareDisabled('JETTY_SHARE_NO_CSS_REWRITE', 'JETTY_SHARE_CSS_REWRITE');
         $cssOn = $bodyOn && ! $cssOff;
 
         $max = self::DEFAULT_MAX_BYTES;
@@ -49,5 +47,10 @@ final class TunnelRewriteOptions
             cssRewrite: $cssOn,
             maxBodyBytes: $max,
         );
+    }
+
+    private static function envShareDisabled(string $noKey, string $legacyZeroKey): bool
+    {
+        return getenv($noKey) === '1' || getenv($legacyZeroKey) === '0';
     }
 }

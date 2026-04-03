@@ -132,14 +132,14 @@ Opt out of header rewriting: **`JETTY_SHARE_NO_LOCATION_REWRITE=1`**.
 
 **Response bodies (default on):** HTML **`href` / `src` / `action` / `srcset` / `meta refresh`**, **`url()`** inside CSS (inline **`style`** and **`<style>`**), and **quoted absolute URLs** in inline **`<script>`** and standalone **`application/javascript`** responses. Standalone JSON and binary content are not rewritten.
 
-- Disable all body rewriting: **`JETTY_SHARE_NO_BODY_REWRITE=1`** or **`JETTY_SHARE_BODY_REWRITE=0`**.
+- Disable all body rewriting: **`JETTY_SHARE_NO_BODY_REWRITE=1`** (legacy: **`JETTY_SHARE_BODY_REWRITE=0`**).
 - Disable only JS string rewriting: **`JETTY_SHARE_NO_JS_REWRITE=1`** (CSS + HTML attributes still run when body rewrite is on).
 - Disable only CSS **`url()`** rewriting: **`JETTY_SHARE_NO_CSS_REWRITE=1`**.
 - Max body size to process (bytes): **`JETTY_SHARE_BODY_REWRITE_MAX_BYTES`** (default **4194304**).
 
 **CLI (same run, overrides env):** **`jetty share --no-body-rewrite`**, **`--no-js-rewrite`**, **`--no-css-rewrite`**.
 
-**Edge WebSocket drops (“HTTP forwarding paused”):** Heartbeats use the REST API; the **agent** uses a separate **`wss://…/agent`** connection. The **PHP CLI sends a WebSocket ping every 25s**; disable with **`JETTY_SHARE_NO_WS_PING=1`**. On the **server**, run **`scripts/jetty-edge-nginx-install.sh`** (or **`install-jetty-edge.sh --nginx-site`**) from the Jetty repo so nginx applies long **`proxy_read_timeout`**, **`proxy_send_timeout`**, and **`proxy_buffering off`** for the tunnel zone; **`install-jetty-edge.sh --upgrade`** refreshes that nginx site automatically when **`jetty-edge-tunnels.conf`** is already installed. Run **`jetty share` again** to reconnect the agent after a drop.
+**Edge WebSocket drops (“HTTP forwarding paused”):** Heartbeats use the REST API; the **agent** uses a separate **`wss://…/agent`** connection. The **PHP CLI sends a WebSocket ping right after registration, then every 25s** (so idle proxies are less likely to close `/agent` before the first ping); disable with **`JETTY_SHARE_NO_WS_PING=1`**. On the **server**, run **`scripts/jetty-edge-nginx-install.sh`** (or **`install-jetty-edge.sh --nginx-site`**) from the Jetty repo so nginx applies long **`proxy_read_timeout`**, **`proxy_send_timeout`**, and **`proxy_buffering off`** for the tunnel zone; **`install-jetty-edge.sh --upgrade`** refreshes that nginx site automatically when **`jetty-edge-tunnels.conf`** is already installed. Run **`jetty share` again** to reconnect the agent after a drop.
 
 **Reconnect + resume:** By default the agent **retries the edge WebSocket** with backoff after a clean disconnect (disable with **`JETTY_SHARE_NO_EDGE_RECONNECT=1`**). **`jetty share`** can **resume** a tunnel you already own via **`GET /api/tunnels` + `POST …/attach`** unless **`JETTY_SHARE_NO_RESUME=1`**.
 
