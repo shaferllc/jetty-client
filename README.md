@@ -139,11 +139,30 @@ Opt out of header rewriting: **`JETTY_SHARE_NO_LOCATION_REWRITE=1`**.
 
 **Edge WebSocket drops (“HTTP forwarding paused”):** Heartbeats use the REST API; the **agent** uses a separate **`wss://…/agent`** connection. The **PHP CLI sends a WebSocket ping every 25s**; disable with **`JETTY_SHARE_NO_WS_PING=1`**. On the **server**, run **`scripts/jetty-edge-nginx-install.sh`** (or **`install-jetty-edge.sh --nginx-site`**) from the Jetty repo so nginx applies long **`proxy_read_timeout`**, **`proxy_send_timeout`**, and **`proxy_buffering off`** for the tunnel zone; **`install-jetty-edge.sh --upgrade`** refreshes that nginx site automatically when **`jetty-edge-tunnels.conf`** is already installed. Run **`jetty share` again** to reconnect the agent after a drop.
 
+**Reconnect + resume:** By default the agent **retries the edge WebSocket** with backoff after a clean disconnect (disable with **`JETTY_SHARE_NO_EDGE_RECONNECT=1`**). **`jetty share`** can **resume** a tunnel you already own via **`GET /api/tunnels` + `POST …/attach`** unless **`JETTY_SHARE_NO_RESUME=1`**.
+
+**Request samples + replay:** The CLI can **`POST`** anonymized per-request metadata to Bridge after each proxied request (disable with **`JETTY_SHARE_CAPTURE_SAMPLES=0`**). In the app, open **Monitor** on a tunnel for the last N rows, path filter, **copy curl**, and a **signed read-only observer link**. **`jetty replay <id>`** repeats a stored request against your **local** upstream (**GET**/**HEAD** only unless **`JETTY_REPLAY_ALLOW_UNSAFE=1`**).
+
 Dynamic JS (concatenated URLs) may still escape; list every host your app emits in **`JETTY_SHARE_REWRITE_HOSTS`**. Optional app-side tweaks (e.g. Laravel **`URL::forceRootUrl`**, Rails **`default_url_options`**, Next **`assetPrefix`**) can complement the agent but are not required.
 
 ### Long idle (heartbeat session)
 
 While **`jetty share`** is running the heartbeat loop, if there is **no HTTP traffic** through the tunnel for **`JETTY_SHARE_IDLE_PROMPT_MINUTES`** (default **120**), the CLI prints a prompt. You then have **`JETTY_SHARE_IDLE_GRACE_MINUTES`** (default **60**) to type **`keep`** (or **`y`**) and Enter, or to hit the public URL again. If there is still no traffic and no confirmation, the tunnel is **removed via the API** so abandoned sessions do not linger. Set **`JETTY_SHARE_IDLE_DISABLE=1`** to turn this off, or **`JETTY_SHARE_IDLE_PROMPT_MINUTES=0`**.
+
+## Documentation (how it all fits together)
+
+The **Jetty Bridge** web app (Laravel) ships long-form docs you should read when integrating webhooks or debugging edge behavior:
+
+| Topic | Where |
+|--------|--------|
+| **Architecture** (Bridge, jetty-edge, CLI, WebSocket frames) | [Tunnels: CLI and Bridge reference](https://usejetty.online/docs/getting-started/tunnels-reference) — replace host with your Bridge if self-hosted |
+| **Quick recipes** (port, `--site`, Valet TLS) | [Sharing local sites](https://usejetty.online/docs/getting-started/sharing) |
+| **Install** | [Installation](https://usejetty.online/docs/getting-started/installation) |
+| **Operators** (edge binary, nginx, secrets) | Signed-in: *Network and edge deployment* in the dashboard |
+
+In the **monorepo**, the same Markdown files live under **`docs/getting-started/`** (e.g. **`tunnels-reference.md`**, **`sharing.md`**). Packagist-only users can browse the main Jetty repository on GitHub for identical content.
+
+**CLI help:** **`jetty help`** lists commands; **`jetty help --advanced`** lists environment variables and config file paths. This README duplicates the most common tunnel vars; the reference doc above explains **resume matching**, **health checks**, **request samples**, **replay**, and **API** endpoints in one place.
 
 ## Split repository
 

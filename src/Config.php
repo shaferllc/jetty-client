@@ -23,7 +23,7 @@ final class Config
      * --api-url / --token flags (highest), then JSON file values where set, then JETTY_* env, then defaults.
      *
      * JSON search order (first readable file wins): --config path, JETTY_CONFIG,
-     * ~/.config/jetty/config.json, ~/.jetty.json, ./jetty.config.json (cwd).
+     * ~/.config/jetty/config.json, ~/.jetty.json, then jetty.config.json / .jetty.json walking up from cwd.
      */
     public static function resolve(?string $configFileFlag = null, ?string $cliRegion = null): self
     {
@@ -59,10 +59,66 @@ final class Config
                 if (array_key_exists('tunnel_server', $data) && is_string($data['tunnel_server']) && trim($data['tunnel_server']) !== '') {
                     $defaultTunnelServer = trim($data['tunnel_server']);
                 }
+                if (isset($data['share']) && is_array($data['share'])) {
+                    $sh = $data['share'];
+                    if (isset($sh['subdomain']) && is_string($sh['subdomain']) && trim($sh['subdomain']) !== '') {
+                        $defaultSubdomain = trim($sh['subdomain']);
+                    }
+                    if (isset($sh['tunnel_server']) && is_string($sh['tunnel_server']) && trim($sh['tunnel_server']) !== '') {
+                        $defaultTunnelServer = trim($sh['tunnel_server']);
+                    }
+                }
             }
         }
 
         return new self($base, $token, $defaultSubdomain, $customDomain, $defaultTunnelServer);
+    }
+
+    /**
+     * Optional `share` object from the nearest jetty.config.json / .jetty.json walking up from cwd.
+     * Used by `jetty share` for defaults (CLI flags still win).
+     *
+     * @return array<string, mixed>
+     */
+    public static function readProjectShareOverrides(): array
+    {
+        $path = self::findProjectConfigPathWalkingUp();
+        if ($path === null) {
+            return [];
+        }
+        $data = self::readJsonConfig($path);
+        if (! is_array($data) || ! isset($data['share']) || ! is_array($data['share'])) {
+            return [];
+        }
+
+        return $data['share'];
+    }
+
+    /**
+     * Nearest project config (jetty.config.json or .jetty.json) walking up from cwd.
+     */
+    private static function findProjectConfigPathWalkingUp(): ?string
+    {
+        $cwd = getcwd();
+        if ($cwd === false) {
+            return null;
+        }
+        $dir = $cwd;
+        for ($i = 0; $i < 64; $i++) {
+            foreach (['jetty.config.json', '.jetty.json'] as $name) {
+                $p = $dir.\DIRECTORY_SEPARATOR.$name;
+                if (is_file($p) && is_readable($p)) {
+                    return $p;
+                }
+            }
+            $parent = dirname($dir);
+            if ($parent === $dir) {
+                break;
+            }
+            $dir = $parent;
+        }
+
+        return null;
     }
 
     /**
@@ -257,7 +313,17 @@ final class Config
         }
         $cwd = getcwd();
         if ($cwd !== false) {
-            $candidates[] = $cwd.\DIRECTORY_SEPARATOR.'jetty.config.json';
+            $dir = $cwd;
+            for ($i = 0; $i < 64; $i++) {
+                foreach (['jetty.config.json', '.jetty.json'] as $name) {
+                    $candidates[] = $dir.\DIRECTORY_SEPARATOR.$name;
+                }
+                $parent = dirname($dir);
+                if ($parent === $dir) {
+                    break;
+                }
+                $dir = $parent;
+            }
         }
 
         foreach ($candidates as $p) {

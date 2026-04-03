@@ -95,14 +95,17 @@ final class EdgeAgent
                 public bool $registeredOk = false;
             };
 
-            $cancelRead = new DeferredCancellation;
-            $onStop = function () use ($state, $cancelRead, $v, $verbose): void {
+            $cancelHolder = new class
+            {
+                public ?DeferredCancellation $read = null;
+            };
+            $onStop = function () use ($state, $cancelHolder, $v, $verbose): void {
                 if ($verbose) {
                     $v('stop: signal or cancellation');
                 }
                 $state->userRequestedStop = true;
                 $state->running = false;
-                $cancelRead->cancel();
+                $cancelHolder->read?->cancel();
             };
 
             $sigIds = [];
@@ -114,160 +117,228 @@ final class EdgeAgent
                 $stderr('edge: signal handlers unavailable: '.$e->getMessage());
             }
 
+            $edgeReconnect = getenv('JETTY_SHARE_NO_EDGE_RECONNECT') !== '1';
+
+            async(function () use ($state, $apiClient, $heartbeatTunnelId, $stderr, $v, $verbose): void {
+                $n = 0;
+                while ($state->running) {
+                    delay(25.0);
+                    if (! $state->running) {
+                        break;
+                    }
+                    try {
+                        $apiClient->heartbeat($heartbeatTunnelId);
+                        $n++;
+                        if ($verbose) {
+                            $v('heartbeat #'.$n.' OK (tunnel id '.$heartbeatTunnelId.')');
+                        }
+                    } catch (\Throwable $e) {
+                        $stderr('heartbeat failed: '.$e->getMessage());
+                        $v('heartbeat exception: '.$e::class.' '.$e->getMessage());
+                    }
+                }
+                $v('heartbeat task exiting');
+            })->ignore();
+
             try {
-                $v('connecting WebSocket: '.self::redactWsUrlForLog($wsUrl));
-                try {
-                    $conn = connect($wsUrl);
-                } catch (\Throwable $e) {
-                    $stderr('edge WebSocket connect failed: '.$e->getMessage());
-                    $v('connect exception: '.$e::class.' '.$e->getMessage());
+                $session = 0;
+                while (! $state->userRequestedStop) {
+                    $session++;
+                    if ($session > 1 && $edgeReconnect) {
+                        $base = min(60, 2 ** min($session - 2, 6));
+                        $jitter = random_int(0, 750) / 1000.0;
+                        $stderr(sprintf('edge: reconnecting in %.1fs (attempt %d)…', $base + $jitter, $session));
+                        delay($base + $jitter);
+                    } elseif ($session > 1 && ! $edgeReconnect) {
+                        $box->result = EdgeAgentResult::Disconnected;
+                        $stderr('edge: WebSocket closed; HTTP forwarding paused (JETTY_SHARE_NO_EDGE_RECONNECT=1). Heartbeats continue until you exit.');
 
-                    return;
-                }
-
-                if (! $conn instanceof WebsocketConnection) {
-                    $stderr('edge: unexpected connection type');
-
-                    return;
-                }
-
-                $v('WebSocket connected; sending register (tunnel_id='.$tunnelId.', agent_token len='.strlen($agentToken).')');
-                $reg = json_encode([
-                    'type' => self::TYPE_REGISTER,
-                    'tunnel_id' => $tunnelId,
-                    'agent_token' => $agentToken,
-                ], JSON_THROW_ON_ERROR);
-                $conn->sendText($reg);
-                $v('register frame sent');
-
-                $first = $conn->receive();
-                if ($first === null) {
-                    $stderr('edge: closed before registration ack');
-                    $v('first receive() returned null');
-
-                    return;
-                }
-
-                $rawFirst = $first->buffer();
-                $v('first frame length='.strlen($rawFirst).' bytes');
-                $type = self::parseType($rawFirst);
-                $v('first frame type='.$type);
-                if ($type === self::TYPE_ERROR) {
-                    /** @var array<string, mixed> $err */
-                    $err = json_decode($rawFirst, true, 512, JSON_THROW_ON_ERROR);
-                    $stderr('edge error: '.(string) ($err['message'] ?? $rawFirst));
-                    if ($verbose) {
-                        $stderr('[jetty:edge] error payload: '.$rawFirst);
+                        break;
                     }
 
-                    return;
-                }
-                if ($type !== self::TYPE_REGISTERED) {
-                    $stderr('edge: unexpected first message: '.$rawFirst);
-                    if ($verbose) {
-                        $stderr('[jetty:edge] full first message: '.$rawFirst);
-                    }
+                    $run->registeredOk = false;
+                    $cancelHolder->read = new DeferredCancellation;
+                    $cancelRead = $cancelHolder->read;
 
-                    return;
-                }
+                    $v('connecting WebSocket: '.self::redactWsUrlForLog($wsUrl));
+                    try {
+                        $conn = connect($wsUrl);
+                    } catch (\Throwable $e) {
+                        $stderr('edge WebSocket connect failed: '.$e->getMessage());
+                        $v('connect exception: '.$e::class.' '.$e->getMessage());
+                        if ($state->userRequestedStop) {
+                            $box->result = EdgeAgentResult::Finished;
 
-                $run->registeredOk = true;
-                $stderr('Edge agent connected; forwarding HTTP to local upstream.');
-                $v('registration acknowledged; starting heartbeat task + receive loop');
-
-                async(function () use ($state, $apiClient, $heartbeatTunnelId, $stderr, $v, $verbose): void {
-                    $n = 0;
-                    while ($state->running) {
-                        delay(25.0);
-                        if (! $state->running) {
                             break;
                         }
-                        try {
-                            $apiClient->heartbeat($heartbeatTunnelId);
-                            $n++;
-                            if ($verbose) {
-                                $v('heartbeat #'.$n.' OK (tunnel id '.$heartbeatTunnelId.')');
+                        if (! $edgeReconnect) {
+                            $box->result = EdgeAgentResult::FailedEarly;
+
+                            break;
+                        }
+
+                        continue;
+                    }
+
+                    if (! $conn instanceof WebsocketConnection) {
+                        $stderr('edge: unexpected connection type');
+                        $box->result = EdgeAgentResult::FailedEarly;
+
+                        break;
+                    }
+
+                    $v('WebSocket connected; sending register (tunnel_id='.$tunnelId.', agent_token len='.strlen($agentToken).')');
+                    $reg = json_encode([
+                        'type' => self::TYPE_REGISTER,
+                        'tunnel_id' => $tunnelId,
+                        'agent_token' => $agentToken,
+                    ], JSON_THROW_ON_ERROR);
+                    $conn->sendText($reg);
+                    $v('register frame sent');
+
+                    $first = $conn->receive();
+                    if ($first === null) {
+                        $stderr('edge: closed before registration ack');
+                        $v('first receive() returned null');
+                        $conn->close();
+                        if ($state->userRequestedStop) {
+                            $box->result = EdgeAgentResult::Finished;
+
+                            break;
+                        }
+                        if (! $edgeReconnect) {
+                            $box->result = EdgeAgentResult::FailedEarly;
+
+                            break;
+                        }
+
+                        continue;
+                    }
+
+                    $rawFirst = $first->buffer();
+                    $v('first frame length='.strlen($rawFirst).' bytes');
+                    $type = self::parseType($rawFirst);
+                    $v('first frame type='.$type);
+                    if ($type === self::TYPE_ERROR) {
+                        /** @var array<string, mixed> $err */
+                        $err = json_decode($rawFirst, true, 512, JSON_THROW_ON_ERROR);
+                        $stderr('edge error: '.(string) ($err['message'] ?? $rawFirst));
+                        if ($verbose) {
+                            $stderr('[jetty:edge] error payload: '.$rawFirst);
+                        }
+                        $conn->close();
+                        $box->result = EdgeAgentResult::FailedEarly;
+
+                        break;
+                    }
+                    if ($type !== self::TYPE_REGISTERED) {
+                        $stderr('edge: unexpected first message: '.$rawFirst);
+                        if ($verbose) {
+                            $stderr('[jetty:edge] full first message: '.$rawFirst);
+                        }
+                        $conn->close();
+                        $box->result = EdgeAgentResult::FailedEarly;
+
+                        break;
+                    }
+
+                    $run->registeredOk = true;
+                    if ($session === 1) {
+                        $stderr('Edge agent connected; forwarding HTTP to local upstream.');
+                    } else {
+                        $stderr('Edge agent reconnected; forwarding HTTP to local upstream.');
+                    }
+                    $v('registration acknowledged; starting ws ping + receive loop');
+
+                    async(function () use ($conn, $state, $v, $verbose): void {
+                        while ($state->running) {
+                            delay(25.0);
+                            if (! $state->running) {
+                                break;
                             }
-                        } catch (\Throwable $e) {
-                            $stderr('heartbeat failed: '.$e->getMessage());
-                            $v('heartbeat exception: '.$e::class.' '.$e->getMessage());
-                        }
-                    }
-                    $v('heartbeat task exiting');
-                })->ignore();
-
-                // Proxies often close idle WebSockets (~60s) even when the TCP session looks open.
-                // RFC6455 pings keep the edge/agent link alive between HTTP requests.
-                async(function () use ($conn, $state, $v, $verbose): void {
-                    while ($state->running) {
-                        delay(25.0);
-                        if (! $state->running) {
-                            break;
-                        }
-                        if (getenv('JETTY_SHARE_NO_WS_PING') === '1') {
-                            continue;
-                        }
-                        try {
-                            $conn->ping();
-                            if ($verbose) {
-                                $v('websocket ping sent');
+                            if (getenv('JETTY_SHARE_NO_WS_PING') === '1') {
+                                continue;
                             }
-                        } catch (\Throwable $e) {
-                            $v('websocket ping failed: '.$e->getMessage());
+                            try {
+                                $conn->ping();
+                                if ($verbose) {
+                                    $v('websocket ping sent');
+                                }
+                            } catch (\Throwable $e) {
+                                $v('websocket ping failed: '.$e->getMessage());
 
-                            break;
+                                break;
+                            }
                         }
-                    }
-                })->ignore();
+                    })->ignore();
 
-                try {
-                    $msgNum = 0;
-                    while ($state->running) {
+                    try {
+                        $msgNum = 0;
+                        while ($state->running) {
+                            try {
+                                $msg = $conn->receive($cancelRead->getCancellation());
+                            } catch (CancelledException $e) {
+                                $v('receive cancelled: '.$e->getMessage());
+
+                                break;
+                            }
+                            if ($msg === null) {
+                                $v('receive() returned null — connection closed');
+
+                                break;
+                            }
+                            $raw = $msg->buffer();
+                            $msgNum++;
+                            $ft = self::parseType($raw);
+                            if ($ft !== self::TYPE_HTTP_REQUEST) {
+                                $v('frame #'.$msgNum.' type='.$ft.' (ignored, not http_request)');
+
+                                continue;
+                            }
+                            /** @var array<string, mixed> $req */
+                            $req = json_decode($raw, true, 512, JSON_THROW_ON_ERROR);
+                            $method = strtoupper((string) ($req['method'] ?? '?'));
+                            $path = (string) ($req['path'] ?? '/');
+                            $v('http_request #'.$msgNum.' '.$method.' '.$path.' → http://'.$localHost.':'.$localPort.$path);
+                            $handled = self::handleHttpRequest($localHost, $localPort, $req, $rewriteOpts);
+                            $conn->sendText(json_encode($handled['response'], JSON_THROW_ON_ERROR));
+                            $v('http_response sent for request_id='.(string) ($req['request_id'] ?? ''));
+                            if (($handled['sample'] ?? null) !== null && getenv('JETTY_SHARE_CAPTURE_SAMPLES') !== '0') {
+                                $sample = $handled['sample'];
+                                async(function () use ($apiClient, $heartbeatTunnelId, $sample): void {
+                                    try {
+                                        $apiClient->postRequestSample($heartbeatTunnelId, $sample);
+                                    } catch (\Throwable) {
+                                    }
+                                })->ignore();
+                            }
+                        }
+                    } catch (\Throwable $e) {
+                        $stderr('edge receive loop error: '.$e->getMessage());
+                        $v('receive loop exception: '.$e::class.' '.$e->getMessage());
+                    } finally {
                         try {
-                            $msg = $conn->receive($cancelRead->getCancellation());
-                        } catch (CancelledException $e) {
-                            $v('receive cancelled: '.$e->getMessage());
-
-                            break;
+                            $conn->close();
+                        } catch (\Throwable) {
                         }
-                        if ($msg === null) {
-                            $v('receive() returned null — connection closed');
-
-                            break;
-                        }
-                        $raw = $msg->buffer();
-                        $msgNum++;
-                        $ft = self::parseType($raw);
-                        if ($ft !== self::TYPE_HTTP_REQUEST) {
-                            $v('frame #'.$msgNum.' type='.$ft.' (ignored, not http_request)');
-
-                            continue;
-                        }
-                        /** @var array<string, mixed> $req */
-                        $req = json_decode($raw, true, 512, JSON_THROW_ON_ERROR);
-                        $method = strtoupper((string) ($req['method'] ?? '?'));
-                        $path = (string) ($req['path'] ?? '/');
-                        $v('http_request #'.$msgNum.' '.$method.' '.$path.' → http://'.$localHost.':'.$localPort.$path);
-                        $res = self::handleHttpRequest($localHost, $localPort, $req, $rewriteOpts);
-                        $conn->sendText(json_encode($res, JSON_THROW_ON_ERROR));
-                        $v('http_response sent for request_id='.(string) ($req['request_id'] ?? ''));
+                        $v('WebSocket connection closed');
                     }
-                } catch (\Throwable $e) {
-                    $stderr('edge receive loop error: '.$e->getMessage());
-                    $v('receive loop exception: '.$e::class.' '.$e->getMessage());
-                } finally {
-                    $state->running = false;
-                    $conn->close();
-                    $v('WebSocket connection closed');
-                }
 
-                if ($run->registeredOk) {
                     if ($state->userRequestedStop) {
                         $box->result = EdgeAgentResult::Finished;
-                    } else {
-                        $box->result = EdgeAgentResult::Disconnected;
-                        $stderr('edge: WebSocket closed (idle, proxy, or server); HTTP forwarding paused. Heartbeats will keep the tunnel until you exit.');
+
+                        break;
                     }
+                    if (! $edgeReconnect) {
+                        $box->result = EdgeAgentResult::Disconnected;
+
+                        break;
+                    }
+                    $stderr('edge: WebSocket dropped; will retry (Ctrl+C to stop).');
+                }
+
+                if ($state->userRequestedStop) {
+                    $box->result = EdgeAgentResult::Finished;
                 }
             } finally {
                 foreach ($sigIds as $id) {
@@ -307,7 +378,7 @@ final class EdgeAgent
 
     /**
      * @param  array<string, mixed>  $req
-     * @return array<string, mixed>
+     * @return array{response: array<string, mixed>, sample: array<string, mixed>|null}
      */
     private static function handleHttpRequest(string $localHost, int $localPort, array $req, TunnelRewriteOptions $rewriteOptions): array
     {
@@ -326,7 +397,10 @@ final class EdgeAgent
 
         $rawBody = base64_decode($bodyB64, true);
         if ($rawBody === false) {
-            return self::errorResponse($requestId, 502, 'invalid body_b64');
+            return [
+                'response' => self::errorResponse($requestId, 502, 'invalid body_b64'),
+                'sample' => self::samplePayload($method, $path, $query, $headers, 502, strlen($bodyB64), 0),
+            ];
         }
 
         $target = 'http://'.$localHost.':'.$localPort.$path;
@@ -336,7 +410,10 @@ final class EdgeAgent
 
         $ch = curl_init($target);
         if ($ch === false) {
-            return self::errorResponse($requestId, 502, 'curl_init failed');
+            return [
+                'response' => self::errorResponse($requestId, 502, 'curl_init failed'),
+                'sample' => self::samplePayload($method, $path, $query, $headers, 502, strlen($rawBody), 0),
+            ];
         }
 
         $curlHeaders = [];
@@ -367,7 +444,10 @@ final class EdgeAgent
         if ($response === false) {
             $err = curl_error($ch);
 
-            return self::errorResponse($requestId, 502, $err);
+            return [
+                'response' => self::errorResponse($requestId, 502, $err),
+                'sample' => self::samplePayload($method, $path, $query, $headers, 502, strlen($rawBody), 0),
+            ];
         }
 
         $status = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
@@ -383,11 +463,36 @@ final class EdgeAgent
         $respBody = TunnelResponseRewriter::maybeRewriteBody($respBody, $outHeaders, $headers, $localHost, $rewriteOptions);
 
         return [
-            'type' => self::TYPE_HTTP_RESPONSE,
-            'request_id' => $requestId,
+            'response' => [
+                'type' => self::TYPE_HTTP_RESPONSE,
+                'request_id' => $requestId,
+                'status' => $status,
+                'headers' => $outHeaders,
+                'body_b64' => base64_encode($respBody),
+            ],
+            'sample' => self::samplePayload($method, $path, $query, $headers, $status, strlen($rawBody), strlen($respBody)),
+        ];
+    }
+
+    /**
+     * @param  array<string, string>  $headers
+     * @return array<string, mixed>
+     */
+    private static function samplePayload(string $method, string $path, string $query, array $headers, int $status, int $reqBodyLen, int $respBodyLen): array
+    {
+        $bytesIn = $reqBodyLen;
+        foreach ($headers as $k => $v) {
+            $bytesIn += strlen((string) $k) + strlen((string) $v) + 4;
+        }
+
+        return [
+            'method' => $method,
+            'path' => $path,
+            'query' => $query !== '' ? $query : null,
             'status' => $status,
-            'headers' => $outHeaders,
-            'body_b64' => base64_encode($respBody),
+            'bytes_in' => $bytesIn,
+            'bytes_out' => $respBodyLen,
+            'headers' => $headers,
         ];
     }
 

@@ -40,7 +40,9 @@ final class Application
                 'update', 'self-update' => $this->cmdSelfUpdate($rest),
                 'global-update' => $this->cmdGlobalUpdate($rest),
                 'install-client' => $this->cmdInstallClient($rest),
-                'list' => $this->cmdList($global),
+                'list' => $this->cmdList($global, $rest),
+                'replay' => $this->cmdReplay($global, $rest),
+                'domains' => $this->cmdDomains($global, $rest),
                 'delete' => $this->cmdDelete($global, $rest),
                 'share', 'http' => $this->cmdShare($global, $rest),
                 'onboard' => $this->cmdOnboard($global, $rest),
@@ -973,8 +975,23 @@ final class Application
     /**
      * @param  array{api-url: ?string, token: ?string, config: ?string, region: ?string}  $global
      */
-    private function cmdList(array $global): int
+    /**
+     * @param  array{api-url: ?string, token: ?string, config: ?string, region: ?string}  $global
+     * @param  list<string>  $rest
+     */
+    private function cmdList(array $global, array $rest = []): int
     {
+        if (in_array('--help', $rest, true) || in_array('-h', $rest, true)) {
+            $this->stdout("Usage: jetty list [--long|-l]\n");
+
+            return 0;
+        }
+        $long = in_array('--long', $rest, true) || in_array('-l', $rest, true);
+        $unknown = array_values(array_filter($rest, fn (string $x) => ! in_array($x, ['--long', '-l'], true)));
+        if ($unknown !== []) {
+            throw new \InvalidArgumentException("Usage: jetty list [--long|-l]\n");
+        }
+
         $client = $this->client($global);
         $tunnels = $client->listTunnels();
 
@@ -989,8 +1006,159 @@ final class Application
             $status = $t['status'] ?? '';
             $public = $t['public_url'] ?? '';
             $local = $t['local_target'] ?? '';
-            $this->stdout("{$id}  {$status}  {$public}  {$local}");
+            if ($long) {
+                $note = isset($t['note']) && is_string($t['note']) && trim($t['note']) !== '' ? trim($t['note']) : '';
+                $suffix = $note !== '' ? '  note: '.$note : '';
+                $this->stdout("{$id}  {$status}  {$public}  {$local}{$suffix}");
+            } else {
+                $this->stdout("{$id}  {$status}  {$public}  {$local}");
+            }
         }
+
+        return 0;
+    }
+
+    /**
+     * @param  array{api-url: ?string, token: ?string, config: ?string, region: ?string}  $global
+     * @param  list<string>  $rest
+     */
+    private function cmdReplay(array $global, array $rest): int
+    {
+        if ($rest === [] || in_array('--help', $rest, true) || in_array('-h', $rest, true)) {
+            $this->stdout("Usage: jetty replay <sample-id>\n");
+            $this->stdout("Replays a stored request sample against the tunnel's local_host:local_port.\n");
+            $this->stdout("GET and HEAD only unless JETTY_REPLAY_ALLOW_UNSAFE=1.\n");
+
+            return 0;
+        }
+
+        $id = (int) ($rest[0] ?? 0);
+        if ($id < 1) {
+            throw new \InvalidArgumentException('Invalid sample id');
+        }
+
+        $client = $this->client($global);
+        $data = $client->getRequestSample($id);
+        $method = strtoupper((string) ($data['method'] ?? 'GET'));
+        $unsafe = getenv('JETTY_REPLAY_ALLOW_UNSAFE') === '1';
+        if ($method !== 'GET' && $method !== 'HEAD' && ! $unsafe) {
+            $this->stderr('Replay only allows GET/HEAD by default. Set JETTY_REPLAY_ALLOW_UNSAFE=1 to replay other methods.');
+
+            return 1;
+        }
+
+        $tunnel = $data['tunnel'] ?? null;
+        if (! is_array($tunnel)) {
+            throw new \RuntimeException('API response missing tunnel');
+        }
+
+        $host = (string) ($tunnel['local_host'] ?? '127.0.0.1');
+        $port = (int) ($tunnel['local_port'] ?? 80);
+        $path = (string) ($data['path'] ?? '/');
+        if ($path === '' || ($path[0] ?? '') !== '/') {
+            $path = '/'.ltrim($path, '/');
+        }
+
+        $query = $data['query'] ?? null;
+        $query = is_string($query) && $query !== '' ? $query : null;
+
+        $localUrl = 'http://'.$host.':'.$port.$path;
+        if ($query !== null) {
+            $localUrl .= '?'.$query;
+        }
+
+        $ch = curl_init($localUrl);
+        if ($ch === false) {
+            throw new \RuntimeException('curl_init failed');
+        }
+
+        curl_setopt_array($ch, [
+            CURLOPT_CUSTOMREQUEST => $method,
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_HEADER => false,
+            CURLOPT_TIMEOUT => 60,
+            CURLOPT_FOLLOWLOCATION => false,
+        ]);
+
+        if ($method === 'GET' || $method === 'HEAD') {
+            curl_setopt($ch, CURLOPT_HTTPGET, true);
+        }
+
+        $out = curl_exec($ch);
+        $err = curl_error($ch);
+        $code = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        curl_close($ch);
+
+        if ($out === false) {
+            throw new \RuntimeException('replay failed: '.$err);
+        }
+
+        $this->stdout((string) $out);
+        $this->stderr('HTTP '.$code);
+
+        return 0;
+    }
+
+    /**
+     * @param  array{api-url: ?string, token: ?string, config: ?string, region: ?string}  $global
+     * @param  list<string>  $args
+     */
+    private function cmdDomains(array $global, array $args): int
+    {
+        if (in_array('--help', $args, true) || in_array('-h', $args, true)) {
+            $this->stdout("Usage: jetty domains [--json]\n");
+            $this->stdout("List subdomain labels reserved for your team (public URL preview).\n");
+
+            return 0;
+        }
+        $jsonOut = in_array('--json', $args, true) || in_array('--machine', $args, true);
+        $unknown = array_values(array_filter($args, fn (string $x) => ! in_array($x, ['--json', '--machine'], true)));
+        if ($unknown !== []) {
+            throw new \InvalidArgumentException("Usage: jetty domains [--json]\n");
+        }
+
+        $client = $this->client($global);
+        $payload = $client->listReservedSubdomains();
+        $rows = $payload['data'];
+        $meta = $payload['meta'] ?? [];
+        $suffix = is_array($meta) && isset($meta['tunnel_host_suffix']) && is_string($meta['tunnel_host_suffix'])
+            ? $meta['tunnel_host_suffix']
+            : '';
+
+        if ($jsonOut) {
+            $this->stdout(json_encode(['data' => $rows, 'meta' => $meta], JSON_THROW_ON_ERROR));
+
+            return 0;
+        }
+
+        if ($rows === []) {
+            $this->stdout('No reserved subdomains for this team. Add labels in the Jetty app (Domains) or run: jetty help');
+            if ($suffix !== '') {
+                $this->stdout('Tunnel host suffix: '.$suffix);
+            }
+
+            return 0;
+        }
+
+        $this->stdout('Reserved labels (your team only):');
+        if ($suffix !== '') {
+            $this->stdout('Tunnel host suffix: '.$suffix);
+        }
+        $this->stdout('');
+        foreach ($rows as $row) {
+            if (! is_array($row)) {
+                continue;
+            }
+            $slug = (string) ($row['slug'] ?? '');
+            $hint = (string) ($row['full_host_hint'] ?? '');
+            if ($hint !== '') {
+                $this->stdout($slug."\t".$hint);
+            } else {
+                $this->stdout($slug);
+            }
+        }
+        $this->stdout('');
+        $this->stdout('Use: jetty share --subdomain=LABEL (or set subdomain in jetty.config.json).');
 
         return 0;
     }
@@ -1198,15 +1366,31 @@ final class Application
         $upstreamExplicit = false;
         $tunnelServerFlag = null;
         $printUrlOnly = false;
-        $skipEdge = false;
         $subdomain = null;
         $shareVerbose = false;
         $noDetect = false;
         $serveDocroot = null;
         $deleteOnExit = getenv('JETTY_SHARE_DELETE_ON_EXIT') === '1';
-        $noBodyRewrite = false;
-        $noJsRewrite = false;
-        $noCssRewrite = false;
+        $noResume = false;
+        $noHealthCheck = false;
+        $healthPath = null;
+
+        $shareFile = Config::readProjectShareOverrides();
+        $skipEdge = filter_var($shareFile['skip_edge'] ?? false, FILTER_VALIDATE_BOOLEAN);
+        $noBodyRewrite = filter_var($shareFile['no_body_rewrite'] ?? false, FILTER_VALIDATE_BOOLEAN);
+        $noJsRewrite = filter_var($shareFile['no_js_rewrite'] ?? false, FILTER_VALIDATE_BOOLEAN);
+        $noCssRewrite = filter_var($shareFile['no_css_rewrite'] ?? false, FILTER_VALIDATE_BOOLEAN);
+        if (getenv('JETTY_SHARE_REWRITE_HOSTS') === false && isset($shareFile['rewrite_hosts'])) {
+            $rh = $shareFile['rewrite_hosts'];
+            if (is_string($rh) && trim($rh) !== '') {
+                putenv('JETTY_SHARE_REWRITE_HOSTS='.trim($rh));
+            } elseif (is_array($rh)) {
+                $parts = array_filter(array_map('trim', array_map('strval', $rh)));
+                if ($parts !== []) {
+                    putenv('JETTY_SHARE_REWRITE_HOSTS='.implode(',', $parts));
+                }
+            }
+        }
 
         $positional = [];
         foreach ($args as $arg) {
@@ -1299,6 +1483,11 @@ final class Application
 
                 continue;
             }
+            if ($arg === '--edge') {
+                $skipEdge = false;
+
+                continue;
+            }
             if ($arg === '--no-body-rewrite') {
                 $noBodyRewrite = true;
 
@@ -1311,6 +1500,21 @@ final class Application
             }
             if ($arg === '--no-css-rewrite') {
                 $noCssRewrite = true;
+
+                continue;
+            }
+            if ($arg === '--no-resume') {
+                $noResume = true;
+
+                continue;
+            }
+            if ($arg === '--no-health-check') {
+                $noHealthCheck = true;
+
+                continue;
+            }
+            if (str_starts_with($arg, '--health-path=')) {
+                $healthPath = substr($arg, strlen('--health-path='));
 
                 continue;
             }
@@ -1405,24 +1609,79 @@ final class Application
             $this->stderr($portHint);
         }
 
-        if ($shareVerbose) {
-            $this->shareVerboseLog(true, 'POST /api/tunnels body: '.json_encode([
-                'local_host' => $localHost,
-                'local_port' => $port,
-                'subdomain' => $subdomain,
-                'server' => $tunnelServer,
-            ], JSON_THROW_ON_ERROR));
+        $healthPathResolved = '/';
+        if ($healthPath !== null && trim((string) $healthPath) !== '') {
+            $healthPathResolved = '/'.ltrim(trim((string) $healthPath), '/');
+        } else {
+            $envPath = getenv('JETTY_SHARE_HEALTH_PATH');
+            if (is_string($envPath) && trim($envPath) !== '') {
+                $healthPathResolved = '/'.ltrim(trim($envPath), '/');
+            }
         }
+
+        $this->shareProbeUpstreamHealth($localHost, $port, $healthPathResolved, $noHealthCheck);
 
         $data = null;
         $id = 0;
         $publicUrl = '';
+        $resumedTunnel = false;
 
         try {
-            $data = $client->createTunnel($localHost, $port, $subdomain, $tunnelServer);
+            $resumeId = null;
+            $allowResume = ! $noResume && getenv('JETTY_SHARE_NO_RESUME') !== '1';
+            if ($allowResume) {
+                try {
+                    $listed = $client->listTunnels();
+                    $hit = $this->shareFindResumableTunnel($listed, $localHost, $port, $subdomain, $tunnelServer);
+                    if ($hit !== null && (int) ($hit['id'] ?? 0) > 0) {
+                        $resumeId = (int) $hit['id'];
+                    }
+                    if ($shareVerbose) {
+                        $this->shareVerboseLog(true, 'resume: list '.count($listed).' tunnel(s); match='.($resumeId !== null ? (string) $resumeId : 'none'));
+                    }
+                } catch (\Throwable $e) {
+                    if ($shareVerbose) {
+                        $this->shareVerboseLog(true, 'resume: list tunnels failed: '.$e->getMessage());
+                    }
+                }
+            }
 
             if ($shareVerbose) {
-                $this->shareVerboseLog(true, 'createTunnel response (redacted): '.json_encode($this->shareRedactTunnelResponseForLog($data), JSON_THROW_ON_ERROR));
+                if ($resumeId !== null) {
+                    $this->shareVerboseLog(true, 'POST /api/tunnels/'.$resumeId.'/attach body: '.json_encode([
+                        'local_host' => $localHost,
+                        'local_port' => $port,
+                        'server' => ($tunnelServer !== null && trim((string) $tunnelServer) !== '') ? trim((string) $tunnelServer) : null,
+                    ], JSON_THROW_ON_ERROR));
+                } else {
+                    $this->shareVerboseLog(true, 'POST /api/tunnels body: '.json_encode([
+                        'local_host' => $localHost,
+                        'local_port' => $port,
+                        'subdomain' => $subdomain,
+                        'server' => $tunnelServer,
+                    ], JSON_THROW_ON_ERROR));
+                }
+            }
+
+            if ($resumeId !== null) {
+                try {
+                    $data = $client->attachTunnel($resumeId, $localHost, $port, $tunnelServer);
+                    $resumedTunnel = true;
+                } catch (\RuntimeException $e) {
+                    if (preg_match('/HTTP (404|405)\b/', $e->getMessage()) !== 1) {
+                        throw $e;
+                    }
+                    if (! $printUrlOnly) {
+                        $this->stderr('Note: tunnel resume is not available on this Bridge; registering a new tunnel instead.');
+                    }
+                    $data = $client->createTunnel($localHost, $port, $subdomain, $tunnelServer);
+                }
+            } else {
+                $data = $client->createTunnel($localHost, $port, $subdomain, $tunnelServer);
+            }
+
+            if ($shareVerbose) {
+                $this->shareVerboseLog(true, 'tunnel API response (redacted): '.json_encode($this->shareRedactTunnelResponseForLog($data), JSON_THROW_ON_ERROR));
             }
 
             $publicUrl = (string) ($data['public_url'] ?? '');
@@ -1456,6 +1715,9 @@ final class Application
                 $this->stderr('Server:      '.$srvOut);
             }
             $this->stderr('Tunnel id:   '.$id);
+            if ($resumedTunnel) {
+                $this->stderr('Session:     resumed existing tunnel (same public URL; new edge credentials)');
+            }
             $this->stderr('Status:      '.$status);
             if ($ws !== '') {
                 $this->stderr('Edge WS:     '.$ws);
@@ -1916,7 +2178,7 @@ final class Application
 
     private function shareUsageSummary(): string
     {
-        return 'Usage: jetty share [port] [--host=127.0.0.1] [--server=us-west-1] [--site=HOST] [--subdomain=label] [--print-url-only] [--skip-edge] [--serve[=DIR]] [--no-detect] [--delete-on-exit] [--no-body-rewrite] [--no-js-rewrite] [--no-css-rewrite] [--verbose|-v|--errors] (alias: http)';
+        return 'Usage: jetty share [port] [--host=127.0.0.1] [--server=us-west-1] [--site=HOST] [--subdomain=label] [--print-url-only] [--skip-edge] [--serve[=DIR]] [--no-detect] [--no-resume] [--health-path=PATH] [--no-health-check] [--delete-on-exit] [--no-body-rewrite] [--no-js-rewrite] [--no-css-rewrite] [--verbose|-v|--errors] (alias: http)';
     }
 
     private function shareUsageHelp(): string
@@ -1928,6 +2190,9 @@ final class Application
   --host= / --site= / --bind= / --local= / --local-host=  Upstream hostname or IP (default 127.0.0.1).
   --serve[=DIR]  Start PHP’s built-in server (default docroot: ./public if present, else cwd) and tunnel to it; optional port as first arg.
   --no-detect    Skip local-dev auto-detection (use plain 127.0.0.1 + port scan). Env: JETTY_SHARE_NO_DETECT=1
+  --no-resume    Always register a new tunnel (skip GET /api/tunnels + attach). Env: JETTY_SHARE_NO_RESUME=1
+  --health-path=PATH  Upstream probe path (default /). Env: JETTY_SHARE_HEALTH_PATH
+  --no-health-check   Skip GET probe to local upstream before creating the tunnel. Env: JETTY_SHARE_NO_HEALTH_CHECK=1
   --skip-edge  Register + heartbeats only; no WebSocket forwarding agent.
   --no-body-rewrite  Disable tunnel URL rewriting of response bodies (HTML/CSS/JS). Env: JETTY_SHARE_NO_BODY_REWRITE=1
   --no-js-rewrite  Disable rewriting quoted URLs inside inline/standalone JavaScript only. Env: JETTY_SHARE_NO_JS_REWRITE=1
@@ -2001,6 +2266,113 @@ TXT;
         }
 
         return false;
+    }
+
+    /**
+     * GET local upstream before registering the tunnel so misconfiguration fails fast.
+     *
+     * @param  non-empty-string  $path  Path beginning with /
+     */
+    private function shareProbeUpstreamHealth(string $localHost, int $port, string $path, bool $noHealthCheck): void
+    {
+        if ($noHealthCheck || getenv('JETTY_SHARE_NO_HEALTH_CHECK') === '1') {
+            return;
+        }
+
+        $url = 'http://'.$localHost.':'.$port.$path;
+        $ch = curl_init($url);
+        if ($ch === false) {
+            throw new \RuntimeException('upstream health check: curl_init failed for '.$url);
+        }
+
+        curl_setopt_array($ch, [
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_HEADER => true,
+            CURLOPT_TIMEOUT => 5,
+            CURLOPT_CONNECTTIMEOUT => 3,
+            CURLOPT_FOLLOWLOCATION => true,
+            CURLOPT_MAXREDIRS => 3,
+            CURLOPT_HTTPGET => true,
+        ]);
+
+        $raw = curl_exec($ch);
+        $errno = curl_errno($ch);
+        $err = curl_error($ch);
+        $status = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        curl_close($ch);
+
+        if ($raw === false || $errno !== 0) {
+            throw new \RuntimeException(
+                'upstream health check failed: could not reach '.$url.' ('.($err !== '' ? $err : 'curl error '.$errno).'). Fix your local server or pass --no-health-check.'
+            );
+        }
+
+        if ($status === 0) {
+            throw new \RuntimeException(
+                'upstream health check failed: no HTTP response from '.$url.'. Fix your local server or pass --no-health-check.'
+            );
+        }
+
+        if ($status >= 500) {
+            throw new \RuntimeException(
+                'upstream health check failed: '.$url.' returned HTTP '.$status.'. Fix your app or pass --no-health-check.'
+            );
+        }
+    }
+
+    private static function shareNormalizeTunnelServer(?string $server): ?string
+    {
+        if ($server === null) {
+            return null;
+        }
+        $t = trim($server);
+
+        return $t === '' ? null : $t;
+    }
+
+    /**
+     * Pick an existing API tunnel row to reconnect when local target + edge server + optional subdomain match.
+     *
+     * @param  list<array<string, mixed>>  $tunnels
+     * @return array<string, mixed>|null
+     */
+    private function shareFindResumableTunnel(array $tunnels, string $localHost, int $port, ?string $subdomain, ?string $tunnelServer): ?array
+    {
+        $target = $localHost.':'.$port;
+        $wantServer = self::shareNormalizeTunnelServer($tunnelServer);
+        $wantSub = $subdomain !== null ? trim($subdomain) : '';
+
+        $candidates = [];
+        foreach ($tunnels as $t) {
+            if (! is_array($t)) {
+                continue;
+            }
+            if ((string) ($t['local_target'] ?? '') !== $target) {
+                continue;
+            }
+            $gotServer = self::shareNormalizeTunnelServer(
+                isset($t['server']) && is_string($t['server']) ? $t['server'] : null
+            );
+            if ($gotServer !== $wantServer) {
+                continue;
+            }
+            if ($wantSub !== '' && trim((string) ($t['subdomain'] ?? '')) !== $wantSub) {
+                continue;
+            }
+            $candidates[] = $t;
+        }
+
+        if ($candidates === []) {
+            return null;
+        }
+
+        if ($wantSub !== '') {
+            return $candidates[0];
+        }
+
+        usort($candidates, fn ($a, $b): int => ((int) ($b['id'] ?? 0)) <=> ((int) ($a['id'] ?? 0)));
+
+        return $candidates[0];
     }
 
     /**
@@ -2079,10 +2451,12 @@ Commands:
   jetty help [--advanced|-a]   This help; --advanced lists config file & environment variables
   jetty logout
   jetty reset
-  jetty list
+  jetty list [--long]   Tunnels (--long includes notes when set)
+  jetty replay <sample-id>   Replay a captured request against your local upstream (GET by default; see JETTY_REPLAY_ALLOW_UNSAFE)
+  jetty domains [--json]   Reserved subdomain labels for your team (from Domains in the app)
   jetty delete <id>
   jetty config set|get|clear|wizard ...
-  jetty share [port] [--host=127.0.0.1] [--server=us-west-1] [--site=HOST] [--subdomain=label] [--print-url-only] [--skip-edge] [--serve[=DIR]] [--no-detect] [--delete-on-exit] [--no-body-rewrite] [--no-js-rewrite] [--no-css-rewrite] [--verbose|-v|--errors]
+  jetty share [port] [--host=127.0.0.1] [--server=us-west-1] [--site=HOST] [--subdomain=label] [--print-url-only] [--skip-edge] [--serve[=DIR]] [--no-detect] [--no-resume] [--delete-on-exit] [--no-body-rewrite] [--no-js-rewrite] [--no-css-rewrite] [--verbose|-v|--errors]
     (alias: http)  Auto-detect local dev upstream from cwd (see jetty help --advanced), or --serve for a static PHP server
     --server= tunnel/edge id; default from config.  --site= / --host= upstream host (default 127.0.0.1)
 
@@ -2126,6 +2500,11 @@ TXT;
   JETTY_SHARE_NO_DETECT=1    jetty share: skip local-dev auto upstream detection
   JETTY_SHARE_UPSTREAM=URL   jetty share: force upstream (e.g. http://127.0.0.1:8080) when tools like PHP Monitor don’t write project files
   JETTY_SHARE_DELETE_ON_EXIT=1  jetty share: delete tunnel via API when the CLI session ends (default: leave registered)
+  JETTY_SHARE_NO_RESUME=1    jetty share: always POST a new tunnel (do not resume via GET + attach)
+  JETTY_SHARE_HEALTH_PATH=/path  jetty share: HTTP GET path for upstream health check (default /)
+  JETTY_SHARE_NO_HEALTH_CHECK=1  jetty share: skip upstream GET probe before registering tunnel
+  JETTY_SHARE_CAPTURE_SAMPLES=0   jetty share: do not POST request summaries to the Bridge (default: on)
+  JETTY_REPLAY_ALLOW_UNSAFE=1     jetty replay: allow non-GET methods (can duplicate side effects)
   JETTY_SHARE_NO_LOCATION_REWRITE=1  jetty share: do not rewrite Location / X-Inertia-Location / Refresh to the tunnel host
   JETTY_SHARE_DEBUG_REWRITE=1   jetty share: log tunnel URL rewrite decisions to stderr (see README)
   JETTY_SHARE_REWRITE_HOSTS=h1,h2  Extra canonical hosts to rewrite (comma-separated), beyond upstream + APP_URL discovery

@@ -6,7 +6,7 @@ namespace JettyCli;
 
 final class ApiClient
 {
-    public const VERSION = '0.1.17';
+    public const VERSION = '0.1.18';
 
     /** Default GitHub owner/repo for PHAR `jetty update` / `self-update` when JETTY_*_REPO env is unset (matches Bridge config/jetty.php cli_github_repo). */
     public const DEFAULT_PHAR_RELEASES_REPO = 'shaferllc/jetty';
@@ -46,6 +46,30 @@ final class ApiClient
     }
 
     /**
+     * Reconnect the edge agent to an existing tunnel (new agent_token; same response shape as create).
+     *
+     * @return array<string, mixed>
+     */
+    public function attachTunnel(int $tunnelId, string $localHost, int $localPort, ?string $tunnelServer = null): array
+    {
+        $body = [
+            'local_host' => $localHost,
+            'local_port' => $localPort,
+            'server' => ($tunnelServer !== null && trim($tunnelServer) !== '') ? trim($tunnelServer) : null,
+        ];
+        $payload = json_encode($body, JSON_THROW_ON_ERROR);
+        $res = $this->request('POST', '/api/tunnels/'.$tunnelId.'/attach', $payload);
+
+        if ($res['status'] !== 200) {
+            throw new \RuntimeException('attach tunnel: HTTP '.$res['status'].': '.$res['body']);
+        }
+
+        $json = json_decode($res['body'], true, flags: JSON_THROW_ON_ERROR);
+
+        return is_array($json['data'] ?? null) ? $json['data'] : throw new \RuntimeException('Invalid API response');
+    }
+
+    /**
      * @return list<array<string, mixed>>
      */
     public function listTunnels(): array
@@ -60,6 +84,31 @@ final class ApiClient
         $data = $json['data'] ?? [];
 
         return is_array($data) ? $data : [];
+    }
+
+    /**
+     * @return array{data: list<array<string, mixed>>, meta?: array<string, mixed>}
+     */
+    public function listReservedSubdomains(): array
+    {
+        $res = $this->request('GET', '/api/reserved-subdomains', null);
+
+        if ($res['status'] !== 200) {
+            throw new \RuntimeException('list reserved subdomains: HTTP '.$res['status'].': '.$res['body']);
+        }
+
+        $json = json_decode($res['body'], true, flags: JSON_THROW_ON_ERROR);
+        if (! is_array($json)) {
+            throw new \RuntimeException('Invalid API response');
+        }
+
+        $data = $json['data'] ?? [];
+        $data = is_array($data) ? $data : [];
+
+        return [
+            'data' => $data,
+            'meta' => is_array($json['meta'] ?? null) ? $json['meta'] : [],
+        ];
     }
 
     public function deleteTunnel(int $id): void
@@ -78,6 +127,44 @@ final class ApiClient
         if ($res['status'] !== 200) {
             throw new \RuntimeException('heartbeat: HTTP '.$res['status'].': '.$res['body']);
         }
+    }
+
+    /**
+     * @param  array<string, mixed>  $sample
+     */
+    public function postRequestSample(int $tunnelId, array $sample): void
+    {
+        $body = [
+            'method' => $sample['method'] ?? 'GET',
+            'path' => $sample['path'] ?? '/',
+            'query' => $sample['query'] ?? null,
+            'status' => (int) ($sample['status'] ?? 502),
+            'bytes_in' => (int) ($sample['bytes_in'] ?? 0),
+            'bytes_out' => (int) ($sample['bytes_out'] ?? 0),
+            'headers' => is_array($sample['headers'] ?? null) ? $sample['headers'] : [],
+        ];
+        $payload = json_encode($body, JSON_THROW_ON_ERROR);
+        $res = $this->request('POST', '/api/tunnels/'.$tunnelId.'/request-samples', $payload);
+
+        if (! in_array($res['status'], [200, 201], true)) {
+            throw new \RuntimeException('request sample: HTTP '.$res['status'].': '.$res['body']);
+        }
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    public function getRequestSample(int $sampleId): array
+    {
+        $res = $this->request('GET', '/api/tunnel-request-samples/'.$sampleId, null);
+
+        if ($res['status'] !== 200) {
+            throw new \RuntimeException('get request sample: HTTP '.$res['status'].': '.$res['body']);
+        }
+
+        $json = json_decode($res['body'], true, flags: JSON_THROW_ON_ERROR);
+
+        return is_array($json['data'] ?? null) ? $json['data'] : throw new \RuntimeException('Invalid API response');
     }
 
     /**
