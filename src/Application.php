@@ -35,7 +35,7 @@ final class Application
 
             $command = array_shift($rest);
 
-            return match ($command) {
+            $code = match ($command) {
                 'version', '--version', '-V' => $this->cmdVersion($rest),
                 'update', 'self-update' => $this->cmdSelfUpdate($rest),
                 'global-update' => $this->cmdGlobalUpdate($rest),
@@ -53,6 +53,9 @@ final class Application
                     'Unknown command: '.$command.$this->unknownCommandUpgradeHint($command)."\n".$this->helpText()
                 ),
             };
+            $this->maybePrintUpdateNotice($command, $code);
+
+            return $code;
         } catch (\Throwable $e) {
             $this->stderr($e->getMessage());
 
@@ -1837,8 +1840,138 @@ TXT;
   JETTY_PHAR_RELEASES_REPO   Override GitHub repo for PHAR releases
   JETTY_CLI_GITHUB_REPO      owner/repo or URL for PHAR / installer resolution
   JETTY_PHAR_GITHUB_TOKEN    Private repos / rate limits
+  JETTY_SKIP_UPDATE_NOTICE=1  Suppress periodic “update available” line after commands
 
 TXT;
+    }
+
+    /**
+     * After successful commands, optionally print a one-line notice when a newer PHAR/Packagist release
+     * exists (GitHub cli-v*). Cached: at most one GitHub check per 24h; at most one notice per 24h for the
+     * same release tag (immediate notice when the tag changes). Opt out: JETTY_SKIP_UPDATE_NOTICE=1.
+     */
+    private function maybePrintUpdateNotice(string $command, int $exitCode): void
+    {
+        if ($exitCode !== 0) {
+            return;
+        }
+        if (getenv('JETTY_SKIP_UPDATE_NOTICE') === '1') {
+            return;
+        }
+
+        $skipCommands = ['version', '--version', '-V', 'update', 'self-update', 'global-update', 'help', '--help', '-h'];
+        if (in_array($command, $skipCommands, true)) {
+            return;
+        }
+
+        $pharPath = \Phar::running(false);
+        if ($pharPath !== '' && $this->localPharUpdateUrl() !== null) {
+            return;
+        }
+
+        if ($pharPath === '' && (! class_exists(InstalledVersions::class) || ! InstalledVersions::isInstalled('jetty/client'))) {
+            return;
+        }
+
+        $cachePath = $this->jettyUpdateNoticeCachePath();
+        if ($cachePath === '') {
+            return;
+        }
+
+        $now = time();
+        /** @var array{checked_at?: int, remote_tag?: string, remote_semver?: string, update_available?: bool, last_notice_at?: int, last_notified_tag?: string}|null $cache */
+        $cache = $this->readUpdateNoticeCache($cachePath);
+        $needRefresh = $cache === null || ($now - (int) ($cache['checked_at'] ?? 0)) >= 86400;
+
+        if ($needRefresh) {
+            $repo = $this->releasesRepo();
+            $token = $this->githubTokenForReleases();
+            $latest = GitHubPharRelease::latest($repo, $token);
+            if ($latest === null) {
+                return;
+            }
+            $remoteSemver = GitHubPharRelease::tagToSemver($latest['tag_name']);
+            $cmp = version_compare($remoteSemver, ApiClient::VERSION);
+            $cache = [
+                'checked_at' => $now,
+                'remote_tag' => $latest['tag_name'],
+                'remote_semver' => $remoteSemver,
+                'update_available' => $cmp > 0,
+                'last_notice_at' => (int) ($cache['last_notice_at'] ?? 0),
+                'last_notified_tag' => (string) ($cache['last_notified_tag'] ?? ''),
+            ];
+            $this->writeUpdateNoticeCache($cachePath, $cache);
+        }
+
+        if (! ($cache['update_available'] ?? false)) {
+            return;
+        }
+
+        $tag = (string) ($cache['remote_tag'] ?? '');
+        if ($tag === '') {
+            return;
+        }
+
+        $lastNotifiedTag = (string) ($cache['last_notified_tag'] ?? '');
+        $lastNotice = (int) ($cache['last_notice_at'] ?? 0);
+        if ($tag === $lastNotifiedTag && ($now - $lastNotice) < 86400) {
+            return;
+        }
+
+        $this->stderr('jetty: update available ('.$tag.') — run: jetty update');
+        $cache['last_notice_at'] = $now;
+        $cache['last_notified_tag'] = $tag;
+        $this->writeUpdateNoticeCache($cachePath, $cache);
+    }
+
+    private function jettyUpdateNoticeCachePath(): string
+    {
+        $home = getenv('HOME') ?: getenv('USERPROFILE');
+        if (! is_string($home) || $home === '') {
+            return '';
+        }
+
+        return $home.\DIRECTORY_SEPARATOR.'.config'.\DIRECTORY_SEPARATOR.'jetty'.\DIRECTORY_SEPARATOR.'update-notice.json';
+    }
+
+    /**
+     * @return array<string, mixed>|null
+     */
+    private function readUpdateNoticeCache(string $path): ?array
+    {
+        if (! is_file($path) || ! is_readable($path)) {
+            return null;
+        }
+        $raw = @file_get_contents($path);
+        if ($raw === false || $raw === '') {
+            return null;
+        }
+        try {
+            $data = json_decode($raw, true, 512, JSON_THROW_ON_ERROR);
+        } catch (\JsonException) {
+            return null;
+        }
+
+        return is_array($data) ? $data : null;
+    }
+
+    /**
+     * @param  array<string, mixed>  $data
+     */
+    private function writeUpdateNoticeCache(string $path, array $data): void
+    {
+        $dir = dirname($path);
+        if (! is_dir($dir)) {
+            if (! @mkdir($dir, 0755, true) && ! is_dir($dir)) {
+                return;
+            }
+        }
+        $tmp = $path.'.tmp.'.uniqid('', true);
+        $json = json_encode($data, JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES);
+        if (@file_put_contents($tmp, $json) === false) {
+            return;
+        }
+        @rename($tmp, $path);
     }
 
     private function stdout(string $s): void
