@@ -72,15 +72,28 @@ Disable without removing credentials: **`JETTY_TELEGRAM_ENABLED=0`**.
 
 On the **Jetty Bridge** (this app’s Laravel API), the same env vars apply; set **`JETTY_TELEGRAM_BRIDGE=true`** to also notify on **`POST /api/tunnels`** (created) and **`DELETE /api/tunnels/{id}`** (deleted). Bridge notifications stay off by default so shared staging apps do not ping your bot until you opt in.
 
-### Tunnel redirects (Laravel / `APP_URL`)
+### Tunnel URL rewriting (any framework)
 
-If your local app redirects to its canonical host (e.g. **`https://beacon.test`** from **`APP_URL`**), the edge agent rewrites **`Location`** (and **`X-Inertia-Location`**) when the redirect target’s host is one of:
+The edge WebSocket agent rewrites responses so the **browser stays on `https://{label}.tunnels…`** instead of jumping to a local canonical URL (`APP_URL`, `.test`, `localhost`, etc.). This applies to **any** HTTP stack (Laravel, Rails, Django, Next, Vite, static sites)—not only Laravel.
 
-- The **upstream** host you’re sharing (e.g. **`127.0.0.1`** or **`beacon.test`**),
-- **`APP_URL`** read from **`.env`** (walks up from the current working directory) or from the **`APP_URL`** environment variable,
-- Extra hosts from **`JETTY_SHARE_REWRITE_HOSTS`** (comma-separated), e.g. **`beacon.test,www.beacon.test`**.
+**HTTP headers:** **`Location`**, **`X-Inertia-Location`**, and **`Refresh`** (`meta` refresh–style `url=`) are rewritten when the target host is in the lookup set:
 
-That way the browser stays on **`https://{label}.tunnels…`** even when Laravel forces **`APP_URL`**. Disable with **`JETTY_SHARE_NO_LOCATION_REWRITE=1`** if you need the original redirect.
+- The **upstream** host you’re sharing (e.g. **`127.0.0.1`** or **`myapp.test`**),
+- **`APP_URL`** from a walked-up **`.env`** and/or the **`APP_URL`** environment variable,
+- Extra hosts from **`JETTY_SHARE_REWRITE_HOSTS`** (comma-separated), e.g. **`myapp.test,www.myapp.test`**.
+
+Opt out of header rewriting: **`JETTY_SHARE_NO_LOCATION_REWRITE=1`**.
+
+**Response bodies (default on):** HTML **`href` / `src` / `action` / `srcset` / `meta refresh`**, **`url()`** inside CSS (inline **`style`** and **`<style>`**), and **quoted absolute URLs** in inline **`<script>`** and standalone **`application/javascript`** responses. Standalone JSON and binary content are not rewritten.
+
+- Disable all body rewriting: **`JETTY_SHARE_NO_BODY_REWRITE=1`** or **`JETTY_SHARE_BODY_REWRITE=0`**.
+- Disable only JS string rewriting: **`JETTY_SHARE_NO_JS_REWRITE=1`** (CSS + HTML attributes still run when body rewrite is on).
+- Disable only CSS **`url()`** rewriting: **`JETTY_SHARE_NO_CSS_REWRITE=1`**.
+- Max body size to process (bytes): **`JETTY_SHARE_BODY_REWRITE_MAX_BYTES`** (default **4194304**).
+
+**CLI (same run, overrides env):** **`jetty share --no-body-rewrite`**, **`--no-js-rewrite`**, **`--no-css-rewrite`**.
+
+Dynamic JS (concatenated URLs) may still escape; list every host your app emits in **`JETTY_SHARE_REWRITE_HOSTS`**. Optional app-side tweaks (e.g. Laravel **`URL::forceRootUrl`**, Rails **`default_url_options`**, Next **`assetPrefix`**) can complement the agent but are not required.
 
 ### Long idle (heartbeat session)
 
@@ -143,9 +156,15 @@ Bump **`ApiClient::VERSION`** in `src/ApiClient.php` when you tag a release so t
 ## Requirements
 
 - PHP 8.2+
-- Extensions: `curl`, `json`, `openssl` (for `wss://` edge URLs), `zlib` (for PHAR)
+- Extensions: `curl`, `json`, `dom` (HTML body rewriting), `openssl` (for `wss://` edge URLs), `zlib` (for PHAR)
 - Optional: `pcntl` for reliable Ctrl+C during `jetty share`
 - Dependencies include **amphp/websocket-client** (Composer) for the tunnel agent
+
+## Tests (package developers)
+
+```bash
+cd jetty-client && composer install && composer test
+```
 
 ## Replacing `jetty/php-cli`
 

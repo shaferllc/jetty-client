@@ -4,10 +4,11 @@
     "type": "library",
     "license": "MIT",
     "keywords": ["jetty", "tunnel", "cli", "api"],
-    "version": "0.1.15",
+    "version": "0.1.16",
     "require": {
         "php": "^8.2",
         "ext-curl": "*",
+        "ext-dom": "*",
         "ext-json": "*",
         "ext-mbstring": "*",
         "composer-runtime-api": "^2.2",
@@ -30,10 +31,17 @@
         "sort-packages": true
     },
     "require-dev": {
-        "humbug/box": "^4.6"
+        "humbug/box": "^4.6",
+        "phpunit/phpunit": "^11.0"
     },
     "scripts": {
-        "build-phar": "box compile --no-interaction"
+        "build-phar": "box compile --no-interaction",
+        "test": "phpunit"
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "JettyCli\\Tests\\": "tests/"
+        }
     },
     "replace": {
         "jetty/php-cli": "*"

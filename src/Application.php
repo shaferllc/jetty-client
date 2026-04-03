@@ -1130,6 +1130,9 @@ final class Application
         $noDetect = false;
         $serveDocroot = null;
         $deleteOnExit = getenv('JETTY_SHARE_DELETE_ON_EXIT') === '1';
+        $noBodyRewrite = false;
+        $noJsRewrite = false;
+        $noCssRewrite = false;
 
         $positional = [];
         foreach ($args as $arg) {
@@ -1219,6 +1222,21 @@ final class Application
             }
             if ($arg === '--skip-edge') {
                 $skipEdge = true;
+
+                continue;
+            }
+            if ($arg === '--no-body-rewrite') {
+                $noBodyRewrite = true;
+
+                continue;
+            }
+            if ($arg === '--no-js-rewrite') {
+                $noJsRewrite = true;
+
+                continue;
+            }
+            if ($arg === '--no-css-rewrite') {
+                $noCssRewrite = true;
 
                 continue;
             }
@@ -1393,6 +1411,7 @@ final class Application
 
             $edgeOutcome = null;
             $edgeFailDetail = null;
+            $shareRewriteOptions = $this->shareTunnelRewriteOptionsFromCli($noBodyRewrite, $noJsRewrite, $noCssRewrite);
             if (! $printUrlOnly && ! $skipEdge && $ws !== '' && $agentToken !== '') {
                 try {
                     $edgeOutcome = EdgeAgent::run(
@@ -1405,6 +1424,7 @@ final class Application
                         $id,
                         fn (string $m) => $this->stderr($m),
                         $shareVerbose,
+                        $shareRewriteOptions,
                     );
                 } catch (\Throwable $e) {
                     $edgeFailDetail = $e->getMessage();
@@ -1798,9 +1818,31 @@ final class Application
         }
     }
 
+    /**
+     * CLI flags override environment for this `jetty share` run. Returns null when no CLI overrides (EdgeAgent uses env only).
+     */
+    private function shareTunnelRewriteOptionsFromCli(bool $noBody, bool $noJs, bool $noCss): ?TunnelRewriteOptions
+    {
+        if (! $noBody && ! $noJs && ! $noCss) {
+            return null;
+        }
+
+        $base = TunnelRewriteOptions::fromEnvironment();
+        if ($noBody) {
+            return new TunnelRewriteOptions(false, false, false, $base->maxBodyBytes);
+        }
+
+        return new TunnelRewriteOptions(
+            $base->bodyRewrite,
+            $noJs ? false : $base->jsRewrite,
+            $noCss ? false : $base->cssRewrite,
+            $base->maxBodyBytes,
+        );
+    }
+
     private function shareUsageSummary(): string
     {
-        return 'Usage: jetty share [port] [--host=127.0.0.1] [--server=us-west-1] [--site=HOST] [--subdomain=label] [--print-url-only] [--skip-edge] [--serve[=DIR]] [--no-detect] [--delete-on-exit] [--verbose|-v|--errors] (alias: http)';
+        return 'Usage: jetty share [port] [--host=127.0.0.1] [--server=us-west-1] [--site=HOST] [--subdomain=label] [--print-url-only] [--skip-edge] [--serve[=DIR]] [--no-detect] [--delete-on-exit] [--no-body-rewrite] [--no-js-rewrite] [--no-css-rewrite] [--verbose|-v|--errors] (alias: http)';
     }
 
     private function shareUsageHelp(): string
@@ -1813,6 +1855,9 @@ final class Application
   --serve[=DIR]  Start PHP’s built-in server (default docroot: ./public if present, else cwd) and tunnel to it; optional port as first arg.
   --no-detect    Skip local-dev auto-detection (use plain 127.0.0.1 + port scan). Env: JETTY_SHARE_NO_DETECT=1
   --skip-edge  Register + heartbeats only; no WebSocket forwarding agent.
+  --no-body-rewrite  Disable tunnel URL rewriting of response bodies (HTML/CSS/JS). Env: JETTY_SHARE_NO_BODY_REWRITE=1
+  --no-js-rewrite  Disable rewriting quoted URLs inside inline/standalone JavaScript only. Env: JETTY_SHARE_NO_JS_REWRITE=1
+  --no-css-rewrite  Disable rewriting url() inside CSS (inline style + <style>). Env: JETTY_SHARE_NO_CSS_REWRITE=1
   --delete-on-exit  Exit: call DELETE /api/tunnels (default: leave tunnel registered — remove in the web app or `jetty delete`). Env: JETTY_SHARE_DELETE_ON_EXIT=1
   --no-delete-on-exit  Force no delete on exit (overrides env).
   --verbose / -v / --errors  Log connection steps, heartbeats, and edge WebSocket frames (stderr).
@@ -1939,7 +1984,7 @@ Commands:
   jetty list
   jetty delete <id>
   jetty config set|get|clear|wizard ...
-  jetty share [port] [--host=127.0.0.1] [--server=us-west-1] [--site=HOST] [--subdomain=label] [--print-url-only] [--skip-edge] [--serve[=DIR]] [--no-detect] [--delete-on-exit] [--verbose|-v|--errors]
+  jetty share [port] [--host=127.0.0.1] [--server=us-west-1] [--site=HOST] [--subdomain=label] [--print-url-only] [--skip-edge] [--serve[=DIR]] [--no-detect] [--delete-on-exit] [--no-body-rewrite] [--no-js-rewrite] [--no-css-rewrite] [--verbose|-v|--errors]
     (alias: http)  Auto-detect local dev upstream from cwd (see jetty help --advanced), or --serve for a static PHP server
     --server= tunnel/edge id; default from config.  --site= / --host= upstream host (default 127.0.0.1)
 
@@ -1983,6 +2028,13 @@ TXT;
   JETTY_SHARE_NO_DETECT=1    jetty share: skip local-dev auto upstream detection
   JETTY_SHARE_UPSTREAM=URL   jetty share: force upstream (e.g. http://127.0.0.1:8080) when tools like PHP Monitor don’t write project files
   JETTY_SHARE_DELETE_ON_EXIT=1  jetty share: delete tunnel via API when the CLI session ends (default: leave registered)
+  JETTY_SHARE_NO_LOCATION_REWRITE=1  jetty share: do not rewrite Location / X-Inertia-Location / Refresh to the tunnel host
+  JETTY_SHARE_REWRITE_HOSTS=h1,h2  Extra canonical hosts to rewrite (comma-separated), beyond upstream + APP_URL discovery
+  JETTY_SHARE_NO_BODY_REWRITE=1   Disable HTML/CSS/JS body URL rewriting (default: body rewrite on)
+  JETTY_SHARE_BODY_REWRITE=0      Same as NO_BODY_REWRITE
+  JETTY_SHARE_NO_JS_REWRITE=1     Disable JS string URL rewriting only (default: on when body rewrite on)
+  JETTY_SHARE_NO_CSS_REWRITE=1    Disable CSS url() rewriting only (default: on when body rewrite on)
+  JETTY_SHARE_BODY_REWRITE_MAX_BYTES  Max response body size to rewrite (default 4194304)
   JETTY_SHARE_IDLE_DISABLE=1    jetty share: disable idle prompt + auto-remove (see idle vars below)
   JETTY_SHARE_IDLE_PROMPT_MINUTES  After this many minutes without HTTP (default 120), prompt to keep or remove; 0 disables
   JETTY_SHARE_IDLE_GRACE_MINUTES   After the prompt, minutes to type keep or get traffic (default 60)
