@@ -1129,9 +1129,20 @@ final class Application
         $shareVerbose = false;
         $noDetect = false;
         $serveDocroot = null;
+        $deleteOnExit = getenv('JETTY_SHARE_DELETE_ON_EXIT') === '1';
 
         $positional = [];
         foreach ($args as $arg) {
+            if ($arg === '--delete-on-exit') {
+                $deleteOnExit = true;
+
+                continue;
+            }
+            if ($arg === '--no-delete-on-exit') {
+                $deleteOnExit = false;
+
+                continue;
+            }
             if ($arg === '--verbose' || $arg === '-v' || $arg === '--errors') {
                 $shareVerbose = true;
 
@@ -1325,6 +1336,8 @@ final class Application
             $publicUrl = (string) ($data['public_url'] ?? '');
             $localTarget = (string) ($data['local_target'] ?? '');
             $id = (int) ($data['id'] ?? 0);
+            $shareStartedAt = time();
+            EdgeAgent::initHttpActivity($shareStartedAt);
             $telegramBase = [
                 'tunnel_id' => $id,
                 'public_url' => $publicUrl,
@@ -1413,12 +1426,19 @@ final class Application
             if ($edgeOutcome === EdgeAgentResult::Finished) {
                 $needsHeartbeatLoop = false;
                 if ($shareVerbose) {
-                    $this->shareVerboseLog(true, 'edge agent finished; skipping heartbeat fallback');
+                    $this->shareVerboseLog(true, 'edge agent finished (user stop); skipping heartbeat fallback');
                 }
+            } elseif ($edgeOutcome === EdgeAgentResult::Disconnected) {
+                if ($shareVerbose) {
+                    $this->shareVerboseLog(true, 'edge WebSocket dropped unexpectedly; falling back to heartbeat loop');
+                }
+                $this->stderr("\nEdge WebSocket disconnected (idle timeout, proxy, or edge restart). Tunnel stays registered; heartbeats continue.\n");
+                $this->stderr($this->shareExitTunnelHint($deleteOnExit));
+                $needsHeartbeatLoop = true;
             } elseif ($edgeOutcome === EdgeAgentResult::FailedEarly) {
                 $this->stderr('');
                 $this->stderr('Edge WebSocket agent did not stay up; falling back to heartbeats only (tunnel stays registered).');
-                $this->stderr('Fix edge connectivity, or use --skip-edge for registration + heartbeats without the agent. Ctrl+C to exit and delete the tunnel.');
+                $this->stderr('Fix edge connectivity, or use --skip-edge for registration + heartbeats without the agent. '.$this->shareCtrlCHint($deleteOnExit));
                 $needsHeartbeatLoop = true;
                 TelegramNotifier::edgeAgentFailed(
                     $id,
@@ -1427,24 +1447,34 @@ final class Application
                 );
             }
 
+            $idleAutoDeleted = false;
             if ($needsHeartbeatLoop) {
-                $this->runShareHeartbeatLoop($client, $id, $shareVerbose);
+                $idleAutoDeleted = $this->runShareHeartbeatLoop($client, $id, $publicUrl, $shareVerbose, $deleteOnExit, $shareStartedAt);
             }
 
-            TelegramNotifier::shareEnded($id, $publicUrl, 'session ended (deleting tunnel)');
+            if ($idleAutoDeleted) {
+                return 0;
+            }
 
-            try {
-                if ($shareVerbose) {
-                    $this->shareVerboseLog(true, 'DELETE /api/tunnels/'.$id);
+            if ($deleteOnExit) {
+                TelegramNotifier::shareEnded($id, $publicUrl, 'session ended (CLI deleting tunnel)');
+
+                try {
+                    if ($shareVerbose) {
+                        $this->shareVerboseLog(true, 'DELETE /api/tunnels/'.$id);
+                    }
+                    $client->deleteTunnel($id);
+                    $this->stderr("Tunnel {$id} deleted.\n");
+                } catch (\Throwable $e) {
+                    $this->stderr('warning: could not delete tunnel '.$id.': '.$e->getMessage());
+                    TelegramNotifier::tunnelDeleteFailed($id, $e->getMessage());
+                    if ($shareVerbose) {
+                        $this->stderr('[jetty:share] delete exception: '.$e->getTraceAsString());
+                    }
                 }
-                $client->deleteTunnel($id);
-                $this->stderr("Tunnel {$id} deleted.\n");
-            } catch (\Throwable $e) {
-                $this->stderr('warning: could not delete tunnel '.$id.': '.$e->getMessage());
-                TelegramNotifier::tunnelDeleteFailed($id, $e->getMessage());
-                if ($shareVerbose) {
-                    $this->stderr('[jetty:share] delete exception: '.$e->getTraceAsString());
-                }
+            } else {
+                TelegramNotifier::shareEnded($id, $publicUrl, 'session ended (tunnel left registered — remove in app or jetty delete)');
+                $this->stderr("\nTunnel {$id} left registered. Remove it in the Jetty web app, or run: jetty delete {$id}\n");
             }
 
             return 0;
@@ -1574,9 +1604,26 @@ final class Application
         return $out;
     }
 
-    private function runShareHeartbeatLoop(ApiClient $client, int $tunnelId, bool $verbose): void
+    /**
+     * @return bool True if the tunnel was removed automatically (idle policy); caller should not delete again.
+     */
+    private function runShareHeartbeatLoop(ApiClient $client, int $tunnelId, string $publicUrl, bool $verbose, bool $deleteOnExit, int $shareStartedAt): bool
     {
-        $this->stderr("\nSending heartbeats every 25s. Ctrl+C to delete this tunnel and exit.\n");
+        $idleDisabled = getenv('JETTY_SHARE_IDLE_DISABLE') === '1';
+        $promptAfter = (int) (getenv('JETTY_SHARE_IDLE_PROMPT_MINUTES') ?: '120');
+        if ($promptAfter <= 0) {
+            $idleDisabled = true;
+        }
+        $graceMin = max(1, (int) (getenv('JETTY_SHARE_IDLE_GRACE_MINUTES') ?: '60'));
+
+        if ($deleteOnExit) {
+            $this->stderr("\nSending heartbeats every 25s. Ctrl+C to delete this tunnel and exit.\n");
+        } else {
+            $this->stderr("\nSending heartbeats every 25s. Ctrl+C to stop this session (tunnel stays registered until you remove it in the app or run `jetty delete {$tunnelId}`).\n");
+        }
+        if (! $idleDisabled) {
+            $this->stderr("Long idle: after {$promptAfter} minutes without HTTP traffic you will be prompted; if there is still no traffic and you do not type `keep` within {$graceMin} minutes, this tunnel is removed automatically (JETTY_SHARE_IDLE_DISABLE=1 to turn off).\n");
+        }
         if ($verbose) {
             $this->shareVerboseLog(true, 'heartbeat loop start (tunnel id '.$tunnelId.')');
         }
@@ -1595,6 +1642,10 @@ final class Application
         } else {
             $this->stderr("\n(ext-pcntl not loaded — Ctrl+C handling may vary by platform.)\n");
         }
+
+        $confirmDeadline = null;
+        $idleBaselineAtPrompt = null;
+        $stdinBuf = '';
 
         $nextBeat = time() + 25;
         $beatNum = 0;
@@ -1621,11 +1672,107 @@ final class Application
                 }
                 $nextBeat = $now + 25;
             }
+
+            if (! $idleDisabled) {
+                $lastAct = EdgeAgent::lastHttpActivityUnix() ?? $shareStartedAt;
+
+                if ($confirmDeadline !== null) {
+                    if ($idleBaselineAtPrompt !== null && $lastAct > $idleBaselineAtPrompt) {
+                        $this->stderr("HTTP activity detected; idle warning cleared.\n");
+                        $confirmDeadline = null;
+                        $idleBaselineAtPrompt = null;
+                    } elseif ($this->shareStdinHasKeep($stdinBuf)) {
+                        $this->stderr("Keeping tunnel registered; idle timer reset.\n");
+                        EdgeAgent::markHttpActivity();
+                        $confirmDeadline = null;
+                        $idleBaselineAtPrompt = null;
+                    } elseif (time() >= $confirmDeadline) {
+                        try {
+                            $client->deleteTunnel($tunnelId);
+                            $this->stderr("\nTunnel {$tunnelId} removed automatically (no HTTP traffic and no `keep` within {$graceMin} minutes).\n");
+                            TelegramNotifier::shareEnded($tunnelId, $publicUrl, 'idle timeout (tunnel removed by CLI policy)');
+                        } catch (\Throwable $e) {
+                            $this->stderr('warning: could not remove idle tunnel '.$tunnelId.': '.$e->getMessage());
+                            TelegramNotifier::tunnelDeleteFailed($tunnelId, $e->getMessage());
+                        }
+                        $stop = true;
+
+                        return true;
+                    }
+                }
+
+                $idleSec = time() - $lastAct;
+                if ($confirmDeadline === null && $idleSec >= $promptAfter * 60) {
+                    $this->stderr($this->shareIdlePromptMessage($tunnelId, $publicUrl, $promptAfter, $graceMin));
+                    $idleBaselineAtPrompt = $lastAct;
+                    $confirmDeadline = time() + $graceMin * 60;
+                }
+            }
+
             usleep(200_000);
         }
         if ($verbose) {
             $this->shareVerboseLog(true, 'heartbeat loop end');
         }
+
+        return false;
+    }
+
+    /**
+     * Non-blocking stdin read; returns true if the user typed keep / y / yes on a line.
+     */
+    private function shareStdinHasKeep(string &$buffer): bool
+    {
+        if (! \is_resource(STDIN)) {
+            return false;
+        }
+        if (\function_exists('posix_isatty') && ! posix_isatty(STDIN)) {
+            return false;
+        }
+        stream_set_blocking(STDIN, false);
+        $chunk = fread(STDIN, 4096);
+        stream_set_blocking(STDIN, true);
+        if ($chunk === false || $chunk === '') {
+            return false;
+        }
+        $buffer .= $chunk;
+        while (($pos = strpos($buffer, "\n")) !== false) {
+            $line = substr($buffer, 0, $pos);
+            $buffer = (string) substr($buffer, $pos + 1);
+            $t = strtolower(trim($line));
+            if ($t === 'keep' || $t === 'y' || $t === 'yes') {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private function shareIdlePromptMessage(int $tunnelId, string $publicUrl, int $promptAfterMinutes, int $graceMinutes): string
+    {
+        $urlLine = $publicUrl !== '' ? "Public URL: {$publicUrl}\n" : '';
+
+        return "\nNo HTTP traffic for {$promptAfterMinutes} minutes through this tunnel.\n".$urlLine.
+            "Keep tunnel {$tunnelId} registered? Type keep (or y) and press Enter within {$graceMinutes} minutes, ".
+            "or send a request to the URL above. Otherwise this tunnel will be removed automatically.\n\n";
+    }
+
+    private function shareCtrlCHint(bool $deleteOnExit): string
+    {
+        if ($deleteOnExit) {
+            return 'Ctrl+C to exit and delete the tunnel.';
+        }
+
+        return 'Ctrl+C to stop this session (tunnel stays registered).';
+    }
+
+    private function shareExitTunnelHint(bool $deleteOnExit): string
+    {
+        $tail = $deleteOnExit
+            ? 'Press Ctrl+C to exit and delete the tunnel.'
+            : 'Press Ctrl+C to stop this session (tunnel stays registered until you remove it in the web app).';
+
+        return 'HTTP via the public URL will not reach your app until you run `jetty share` again or the agent reconnects. '.$tail."\n";
     }
 
     private function parseShareUpstreamValue(string $arg, string $prefix): string
@@ -1653,7 +1800,7 @@ final class Application
 
     private function shareUsageSummary(): string
     {
-        return 'Usage: jetty share [port] [--host=127.0.0.1] [--server=us-west-1] [--site=HOST] [--subdomain=label] [--print-url-only] [--skip-edge] [--serve[=DIR]] [--no-detect] [--verbose|-v|--errors] (alias: http)';
+        return 'Usage: jetty share [port] [--host=127.0.0.1] [--server=us-west-1] [--site=HOST] [--subdomain=label] [--print-url-only] [--skip-edge] [--serve[=DIR]] [--no-detect] [--delete-on-exit] [--verbose|-v|--errors] (alias: http)';
     }
 
     private function shareUsageHelp(): string
@@ -1666,6 +1813,8 @@ final class Application
   --serve[=DIR]  Start PHP’s built-in server (default docroot: ./public if present, else cwd) and tunnel to it; optional port as first arg.
   --no-detect    Skip local-dev auto-detection (use plain 127.0.0.1 + port scan). Env: JETTY_SHARE_NO_DETECT=1
   --skip-edge  Register + heartbeats only; no WebSocket forwarding agent.
+  --delete-on-exit  Exit: call DELETE /api/tunnels (default: leave tunnel registered — remove in the web app or `jetty delete`). Env: JETTY_SHARE_DELETE_ON_EXIT=1
+  --no-delete-on-exit  Force no delete on exit (overrides env).
   --verbose / -v / --errors  Log connection steps, heartbeats, and edge WebSocket frames (stderr).
 
 TXT;
@@ -1790,7 +1939,7 @@ Commands:
   jetty list
   jetty delete <id>
   jetty config set|get|clear|wizard ...
-  jetty share [port] [--host=127.0.0.1] [--server=us-west-1] [--site=HOST] [--subdomain=label] [--print-url-only] [--skip-edge] [--serve[=DIR]] [--no-detect] [--verbose|-v|--errors]
+  jetty share [port] [--host=127.0.0.1] [--server=us-west-1] [--site=HOST] [--subdomain=label] [--print-url-only] [--skip-edge] [--serve[=DIR]] [--no-detect] [--delete-on-exit] [--verbose|-v|--errors]
     (alias: http)  Auto-detect local dev upstream from cwd (see jetty help --advanced), or --serve for a static PHP server
     --server= tunnel/edge id; default from config.  --site= / --host= upstream host (default 127.0.0.1)
 
@@ -1833,6 +1982,10 @@ TXT;
   JETTY_TUNNEL_SERVER        Default tunnel/edge id for jetty share (e.g. us-west-1)
   JETTY_SHARE_NO_DETECT=1    jetty share: skip local-dev auto upstream detection
   JETTY_SHARE_UPSTREAM=URL   jetty share: force upstream (e.g. http://127.0.0.1:8080) when tools like PHP Monitor don’t write project files
+  JETTY_SHARE_DELETE_ON_EXIT=1  jetty share: delete tunnel via API when the CLI session ends (default: leave registered)
+  JETTY_SHARE_IDLE_DISABLE=1    jetty share: disable idle prompt + auto-remove (see idle vars below)
+  JETTY_SHARE_IDLE_PROMPT_MINUTES  After this many minutes without HTTP (default 120), prompt to keep or remove; 0 disables
+  JETTY_SHARE_IDLE_GRACE_MINUTES   After the prompt, minutes to type keep or get traffic (default 60)
 
   jetty share detection (port omitted, detection on): tries in order — JETTY_SHARE_UPSTREAM; Laravel APP_URL;
     Bedrock APP_URL; herd/valet links; DDEV; Lando; Symfony .symfony.local.yaml; Laravel Sail + Docker Compose

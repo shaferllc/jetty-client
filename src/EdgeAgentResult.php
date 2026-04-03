@@ -12,6 +12,15 @@ enum EdgeAgentResult
     /** Connect or registration failed; caller may fall back to heartbeats-only. */
     case FailedEarly;
 
-    /** Registered successfully; main loop ran until exit (signal, close, etc.). */
+    /**
+     * Registered successfully; WebSocket closed after Ctrl+C / SIGTERM (normal shutdown).
+     * Caller should exit and delete the tunnel.
+     */
     case Finished;
+
+    /**
+     * Registered successfully; WebSocket closed without user stop (idle, proxy, network, edge restart).
+     * Caller should keep heartbeats so the tunnel is not torn down immediately.
+     */
+    case Disconnected;
 }

@@ -32,6 +32,24 @@ final class EdgeAgent
 
     private const TYPE_HTTP_RESPONSE = 'http_response';
 
+    /** Unix time of last forwarded HTTP request (for idle auto-close in {@see Application::runShareHeartbeatLoop}). */
+    private static ?int $httpActivityUnix = null;
+
+    public static function initHttpActivity(int $unixTime): void
+    {
+        self::$httpActivityUnix = $unixTime;
+    }
+
+    public static function markHttpActivity(): void
+    {
+        self::$httpActivityUnix = time();
+    }
+
+    public static function lastHttpActivityUnix(): ?int
+    {
+        return self::$httpActivityUnix;
+    }
+
     /**
      * Blocks until the edge connection closes or the user stops (signal / cancellation).
      * Runs heartbeats concurrently (same interval as {@see Application} share loop).
@@ -64,6 +82,14 @@ final class EdgeAgent
             $state = new class
             {
                 public bool $running = true;
+
+                /** True after SIGINT/SIGTERM (user wants to end the session). */
+                public bool $userRequestedStop = false;
+            };
+
+            $run = new class
+            {
+                public bool $registeredOk = false;
             };
 
             $cancelRead = new DeferredCancellation;
@@ -71,6 +97,7 @@ final class EdgeAgent
                 if ($verbose) {
                     $v('stop: signal or cancellation');
                 }
+                $state->userRequestedStop = true;
                 $state->running = false;
                 $cancelRead->cancel();
             };
@@ -141,7 +168,7 @@ final class EdgeAgent
                     return;
                 }
 
-                $box->result = EdgeAgentResult::Finished;
+                $run->registeredOk = true;
                 $stderr('Edge agent connected; forwarding HTTP to local upstream.');
                 $v('registration acknowledged; starting heartbeat task + receive loop');
 
@@ -206,6 +233,15 @@ final class EdgeAgent
                     $conn->close();
                     $v('WebSocket connection closed');
                 }
+
+                if ($run->registeredOk) {
+                    if ($state->userRequestedStop) {
+                        $box->result = EdgeAgentResult::Finished;
+                    } else {
+                        $box->result = EdgeAgentResult::Disconnected;
+                        $stderr('edge: WebSocket closed (idle, proxy, or server); HTTP forwarding paused. Heartbeats will keep the tunnel until you exit.');
+                    }
+                }
             } finally {
                 foreach ($sigIds as $id) {
                     EventLoop::cancel($id);
@@ -248,6 +284,8 @@ final class EdgeAgent
      */
     private static function handleHttpRequest(string $localHost, int $localPort, array $req): array
     {
+        self::markHttpActivity();
+
         $requestId = (string) ($req['request_id'] ?? '');
         $method = strtoupper((string) ($req['method'] ?? 'GET'));
         $path = (string) ($req['path'] ?? '/');

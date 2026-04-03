@@ -65,7 +65,7 @@ Set **`JETTY_TELEGRAM_BOT_TOKEN`** (from [@BotFather](https://t.me/BotFather)) a
 
 - A tunnel is registered (`jetty share` / `http`, including `--print-url-only`)
 - The edge WebSocket agent fails early (connectivity issues)
-- The share session ends and the tunnel is deleted, or delete fails
+- The share session ends (tunnel left registered, or deleted if **`--delete-on-exit`** / **`JETTY_SHARE_DELETE_ON_EXIT=1`**), or delete fails
 - `createTunnel` or another fatal error aborts the share
 
 Disable without removing credentials: **`JETTY_TELEGRAM_ENABLED=0`**.
@@ -81,6 +81,10 @@ If your local app redirects to its canonical host (e.g. **`https://beacon.test`*
 - Extra hosts from **`JETTY_SHARE_REWRITE_HOSTS`** (comma-separated), e.g. **`beacon.test,www.beacon.test`**.
 
 That way the browser stays on **`https://{label}.tunnels…`** even when Laravel forces **`APP_URL`**. Disable with **`JETTY_SHARE_NO_LOCATION_REWRITE=1`** if you need the original redirect.
+
+### Long idle (heartbeat session)
+
+While **`jetty share`** is running the heartbeat loop, if there is **no HTTP traffic** through the tunnel for **`JETTY_SHARE_IDLE_PROMPT_MINUTES`** (default **120**), the CLI prints a prompt. You then have **`JETTY_SHARE_IDLE_GRACE_MINUTES`** (default **60**) to type **`keep`** (or **`y`**) and Enter, or to hit the public URL again. If there is still no traffic and no confirmation, the tunnel is **removed via the API** so abandoned sessions do not linger. Set **`JETTY_SHARE_IDLE_DISABLE=1`** to turn this off, or **`JETTY_SHARE_IDLE_PROMPT_MINUTES=0`**.
 
 ## Split repository
 
