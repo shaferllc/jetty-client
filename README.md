@@ -59,6 +59,19 @@ Prefer a **JSON config file** so you do not need shell exports. See `composer sh
 
 Optional fallbacks: `JETTY_API_URL`, `JETTY_SERVER`, `JETTY_TOKEN`, or flags `--api-url` / `--token`.
 
+### Telegram notifications (optional)
+
+Set **`JETTY_TELEGRAM_BOT_TOKEN`** (from [@BotFather](https://t.me/BotFather)) and **`JETTY_TELEGRAM_CHAT_ID`** (your user id, group id, or channel id) to receive HTML alerts when:
+
+- A tunnel is registered (`jetty share` / `http`, including `--print-url-only`)
+- The edge WebSocket agent fails early (connectivity issues)
+- The share session ends and the tunnel is deleted, or delete fails
+- `createTunnel` or another fatal error aborts the share
+
+Disable without removing credentials: **`JETTY_TELEGRAM_ENABLED=0`**.
+
+On the **Jetty Bridge** (this app’s Laravel API), the same env vars apply; set **`JETTY_TELEGRAM_BRIDGE=true`** to also notify on **`POST /api/tunnels`** (created) and **`DELETE /api/tunnels/{id}`** (deleted). Bridge notifications stay off by default so shared staging apps do not ping your bot until you opt in.
+
 ## Split repository
 
 This directory is intended to be the root of a **standalone Git repository** (e.g. `github.com/yourorg/jetty-client`) so you can version and tag releases independently of the main Jetty app. In the main Jetty monorepo it lives at `jetty-client/` for co-development; publish by pushing this tree to `jetty-client` and submitting **`jetty/client`** to [Packagist](https://packagist.org).

@@ -1308,6 +1308,10 @@ final class Application
             ], JSON_THROW_ON_ERROR));
         }
 
+        $data = null;
+        $id = 0;
+        $publicUrl = '';
+
         try {
             $data = $client->createTunnel($localHost, $port, $subdomain, $tunnelServer);
 
@@ -1318,6 +1322,12 @@ final class Application
             $publicUrl = (string) ($data['public_url'] ?? '');
             $localTarget = (string) ($data['local_target'] ?? '');
             $id = (int) ($data['id'] ?? 0);
+            $telegramBase = [
+                'tunnel_id' => $id,
+                'public_url' => $publicUrl,
+                'local_target' => $localTarget,
+                'server' => $tunnelServer,
+            ];
             $status = (string) ($data['status'] ?? '');
             $subdomain = (string) ($data['subdomain'] ?? '');
             $edge = is_array($data['edge'] ?? null) ? $data['edge'] : [];
@@ -1327,6 +1337,7 @@ final class Application
 
             if ($printUrlOnly) {
                 $this->stdout($publicUrl);
+                TelegramNotifier::shareStarted(array_merge($telegramBase, ['print_url_only' => true]));
 
                 return 0;
             }
@@ -1346,6 +1357,8 @@ final class Application
             $this->stderr("\nTry HTTP via edge:\n  curl -H \"Host: {$subdomain}.{$suffix}\" http://127.0.0.1:8090/");
             $this->stderr("(adjust :8090 if your ingress listens elsewhere)\n");
 
+            TelegramNotifier::shareStarted($telegramBase);
+
             try {
                 $client->heartbeat($id);
                 if ($shareVerbose) {
@@ -1359,6 +1372,7 @@ final class Application
             }
 
             $edgeOutcome = null;
+            $edgeFailDetail = null;
             if (! $printUrlOnly && ! $skipEdge && $ws !== '' && $agentToken !== '') {
                 try {
                     $edgeOutcome = EdgeAgent::run(
@@ -1373,6 +1387,7 @@ final class Application
                         $shareVerbose,
                     );
                 } catch (\Throwable $e) {
+                    $edgeFailDetail = $e->getMessage();
                     $this->stderr('edge agent failed: '.$e->getMessage());
                     if ($shareVerbose) {
                         $this->stderr('[jetty:share] '.get_class($e).' in '.$e->getFile().':'.$e->getLine());
@@ -1398,11 +1413,18 @@ final class Application
                 $this->stderr('Edge WebSocket agent did not stay up; falling back to heartbeats only (tunnel stays registered).');
                 $this->stderr('Fix edge connectivity, or use --skip-edge for registration + heartbeats without the agent. Ctrl+C to exit and delete the tunnel.');
                 $needsHeartbeatLoop = true;
+                TelegramNotifier::edgeAgentFailed(
+                    $id,
+                    $publicUrl,
+                    $edgeFailDetail ?? 'Edge WebSocket agent exited early (see CLI output).'
+                );
             }
 
             if ($needsHeartbeatLoop) {
                 $this->runShareHeartbeatLoop($client, $id, $shareVerbose);
             }
+
+            TelegramNotifier::shareEnded($id, $publicUrl, 'session ended (deleting tunnel)');
 
             try {
                 if ($shareVerbose) {
@@ -1412,12 +1434,23 @@ final class Application
                 $this->stderr("Tunnel {$id} deleted.\n");
             } catch (\Throwable $e) {
                 $this->stderr('warning: could not delete tunnel '.$id.': '.$e->getMessage());
+                TelegramNotifier::tunnelDeleteFailed($id, $e->getMessage());
                 if ($shareVerbose) {
                     $this->stderr('[jetty:share] delete exception: '.$e->getTraceAsString());
                 }
             }
 
             return 0;
+        } catch (\Throwable $e) {
+            TelegramNotifier::shareFailed(
+                $data === null ? 'create_tunnel' : 'share',
+                $e,
+                [
+                    'tunnel_id' => $id,
+                    'public_url' => $publicUrl,
+                ]
+            );
+            throw $e;
         } finally {
             $this->shareStopBuiltInServer($builtInServerProc);
         }
