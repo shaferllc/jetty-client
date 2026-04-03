@@ -58,6 +58,7 @@ final class Application
                 'logout' => $this->cmdLogout($rest),
                 'reset' => $this->cmdReset($rest),
                 'config' => $this->cmdConfig($global, $rest),
+                'doctor' => $this->cmdDoctor(),
                 'help', '--help', '-h' => $this->cmdHelp($rest),
                 default => throw new \InvalidArgumentException(
                     'Unknown command: '.$command.$this->unknownCommandUpgradeHint($command)."\n".$this->helpText()
@@ -1421,6 +1422,297 @@ final class Application
         $this->stdout("{$jsonKey}={$s}");
     }
 
+    // ── jetty doctor ────────────────────────────────────────────────
+
+    private function cmdDoctor(): int
+    {
+        $u = $this->ui();
+        $u->banner('doctor');
+
+        $current = ApiClient::VERSION;
+        $thisPath = $this->resolveRunningBinaryPath();
+
+        // ── 1. Find all jetty installs ──
+        $u->section('Installed copies');
+
+        $installs = $this->findAllJettyInstalls();
+
+        if ($installs === []) {
+            $u->out('  No installs found (unexpected).');
+
+            return 1;
+        }
+
+        $primary = null;
+        $duplicates = [];
+
+        foreach ($installs as $install) {
+            $isCurrent = $install['path'] === $thisPath;
+            $marker = $isCurrent ? $u->green(' ← active') : '';
+
+            $versionStr = $install['version'] !== '' ? 'v'.$install['version'] : $u->dim('unknown');
+            $typeStr = $u->dim('('.$install['type'].')');
+
+            $u->out('  '.$install['path']);
+            $u->out('    '.$versionStr.'  '.$typeStr.$marker);
+            $u->out('');
+
+            if ($isCurrent) {
+                $primary = $install;
+            } else {
+                $duplicates[] = $install;
+            }
+        }
+
+        if (count($installs) === 1) {
+            $u->successLine('Single install — no duplicates.');
+        } else {
+            $u->warnLine(count($installs).' installs found. Multiple copies can cause version mismatches.');
+        }
+
+        // ── 2. Version check ──
+        $u->out('');
+        $u->section('Version');
+
+        $latestTag = null;
+        try {
+            $repo = $this->releasesRepo();
+            $token = $this->githubTokenForReleases();
+            $latest = GitHubPharRelease::latest($repo, $token);
+            if ($latest !== null) {
+                $latestTag = $latest['tag_name'];
+                $latestSemver = GitHubPharRelease::tagToSemver($latestTag);
+                $cmp = version_compare($latestSemver, $current);
+
+                $u->out('  '.$u->dim('Current:  ').'v'.$current);
+                $u->out('  '.$u->dim('Latest:   ').'v'.$latestSemver);
+
+                if ($cmp > 0) {
+                    $u->out('');
+                    $u->warnLine('Update available — run: '.$u->cmd('jetty update'));
+                } else {
+                    $u->out('');
+                    $u->successLine('Up to date.');
+                }
+            }
+        } catch (\Throwable) {
+            $u->out('  '.$u->dim('Current:  ').'v'.$current);
+            $u->out('  '.$u->dim('Latest:   ').$u->dim('could not check (network error)'));
+        }
+
+        // ── 3. Offer to clean duplicates ──
+        if ($duplicates !== []) {
+            $u->out('');
+            $u->section('Cleanup');
+
+            $removable = array_filter($duplicates, fn ($d) => $d['type'] !== 'project-wrapper');
+            $wrappers = array_filter($duplicates, fn ($d) => $d['type'] === 'project-wrapper');
+
+            if ($wrappers !== []) {
+                foreach ($wrappers as $w) {
+                    $u->out('  '.$u->dim($w['path'].' — project dev wrapper, safe to ignore.'));
+                }
+            }
+
+            if ($removable !== []) {
+                $u->out('');
+                $u->out('  The following copies can be removed:');
+                foreach ($removable as $dup) {
+                    $u->out('    '.$u->yellow($dup['path']).'  '.$u->dim('('.$dup['type'].')'));
+                }
+                $u->out('');
+                $u->errRaw('  Remove '.count($removable).' duplicate(s)? [y/N] ');
+                $answer = trim((string) fgets(\STDIN));
+                if ($answer !== '' && strtolower($answer[0]) === 'y') {
+                    foreach ($removable as $dup) {
+                        $path = $dup['path'];
+                        if ($dup['type'] === 'composer-global') {
+                            // Remove via composer
+                            $u->out('  Removing Composer global jetty/client…');
+                            exec('composer global remove jetty/client 2>&1', $out, $code);
+                            if ($code === 0) {
+                                $u->successLine('Removed Composer global install.');
+                            } else {
+                                $u->warnLine('Composer remove failed — remove manually: composer global remove jetty/client');
+                            }
+                        } elseif (is_file($path) && is_writable($path)) {
+                            if (@unlink($path)) {
+                                $u->successLine('Removed '.$path);
+                            } else {
+                                $u->warnLine('Could not remove '.$path.' — check permissions.');
+                            }
+                        } elseif (is_link($path)) {
+                            if (@unlink($path)) {
+                                $u->successLine('Removed symlink '.$path);
+                            } else {
+                                $u->warnLine('Could not remove symlink '.$path.' — check permissions.');
+                            }
+                        } else {
+                            $u->warnLine('Cannot remove '.$path.' — remove manually.');
+                        }
+                    }
+                } else {
+                    $u->out('  Skipped.');
+                }
+            }
+        }
+
+        // ── 4. PATH check ──
+        $u->out('');
+        $u->section('PATH');
+
+        if ($primary !== null) {
+            $primaryDir = dirname($primary['path']);
+            $pathDirs = explode(PATH_SEPARATOR, getenv('PATH') ?: '');
+            $found = false;
+            foreach ($pathDirs as $dir) {
+                $rp = realpath($dir);
+                if ($rp !== false && $rp === realpath($primaryDir)) {
+                    $found = true;
+                    break;
+                }
+            }
+            if ($found) {
+                $u->successLine('Primary install directory ('.$primaryDir.') is in PATH.');
+            } else {
+                $u->warnLine($primaryDir.' is not in PATH — add it to your shell profile.');
+            }
+        }
+
+        $u->out('');
+
+        return 0;
+    }
+
+    /**
+     * Find all jetty binaries across common install locations and PATH.
+     *
+     * @return list<array{path: string, version: string, type: string}>
+     */
+    private function findAllJettyInstalls(): array
+    {
+        $home = getenv('HOME') ?: getenv('USERPROFILE') ?: '';
+        $candidates = [];
+
+        // Fixed well-known locations
+        $locations = [
+            $home.'/.local/bin/jetty' => 'phar',
+            '/usr/local/bin/jetty' => 'system',
+            '/opt/homebrew/bin/jetty' => 'homebrew',
+            $home.'/.composer/vendor/bin/jetty' => 'composer-global',
+            $home.'/.config/composer/vendor/bin/jetty' => 'composer-global',
+        ];
+
+        foreach ($locations as $path => $type) {
+            if ($path !== '' && (is_file($path) || is_link($path))) {
+                $rp = realpath($path);
+                $candidates[$rp !== false ? $rp : $path] = ['path' => $rp !== false ? $rp : $path, 'type' => $type];
+            }
+        }
+
+        // Scan PATH for any `jetty` binary
+        $pathDirs = explode(PATH_SEPARATOR, getenv('PATH') ?: '');
+        foreach ($pathDirs as $dir) {
+            $dir = trim($dir);
+            if ($dir === '' || $dir === '.') {
+                continue;
+            }
+            $p = rtrim($dir, '/').\DIRECTORY_SEPARATOR.'jetty';
+            if (is_file($p) || is_link($p)) {
+                $rp = realpath($p);
+                $key = $rp !== false ? $rp : $p;
+                if (! isset($candidates[$key])) {
+                    // Determine type
+                    $type = 'unknown';
+                    if (str_contains($key, 'composer')) {
+                        $type = 'composer-global';
+                    } elseif (str_contains($key, '.local/bin')) {
+                        $type = 'phar';
+                    } elseif (str_contains($key, 'homebrew') || str_contains($key, '/opt/')) {
+                        $type = 'homebrew';
+                    }
+                    $candidates[$key] = ['path' => $key, 'type' => $type];
+                }
+            }
+        }
+
+        // Check CWD for ./jetty (project wrapper)
+        $cwd = getcwd();
+        if ($cwd !== false) {
+            $cwdJetty = $cwd.\DIRECTORY_SEPARATOR.'jetty';
+            if (is_file($cwdJetty)) {
+                $rp = realpath($cwdJetty);
+                $key = $rp !== false ? $rp : $cwdJetty;
+                if (! isset($candidates[$key])) {
+                    $candidates[$key] = ['path' => $key, 'type' => 'project-wrapper'];
+                } else {
+                    $candidates[$key]['type'] = 'project-wrapper';
+                }
+            }
+        }
+
+        // Resolve versions
+        $results = [];
+        foreach ($candidates as $info) {
+            $version = $this->probeJettyVersion($info['path']);
+            $results[] = [
+                'path' => $info['path'],
+                'version' => $version,
+                'type' => $info['type'],
+            ];
+        }
+
+        return $results;
+    }
+
+    /**
+     * Probe a jetty binary for its version string.
+     */
+    private function probeJettyVersion(string $path): string
+    {
+        // If it's the currently running binary, use our constant.
+        if ($path === $this->resolveRunningBinaryPath()) {
+            return ApiClient::VERSION;
+        }
+
+        $output = [];
+        $code = 0;
+        @exec('php '.escapeshellarg($path).' version 2>/dev/null', $output, $code);
+        if ($code === 0 && isset($output[0])) {
+            // Output is like "0.1.19" or "Jetty · v0.1.19..."
+            foreach ($output as $line) {
+                if (preg_match('/(\d+\.\d+\.\d+)/', $line, $m)) {
+                    return $m[1];
+                }
+            }
+        }
+
+        return '';
+    }
+
+    private function resolveRunningBinaryPath(): string
+    {
+        // PHAR?
+        $phar = \Phar::running(false);
+        if ($phar !== '') {
+            $rp = realpath($phar);
+
+            return $rp !== false ? $rp : $phar;
+        }
+
+        // Script path (bin/jetty)
+        $script = $_SERVER['SCRIPT_FILENAME'] ?? $_SERVER['argv'][0] ?? '';
+        if ($script !== '') {
+            $rp = realpath($script);
+
+            return $rp !== false ? $rp : $script;
+        }
+
+        return '';
+    }
+
+    // ── jetty share ──────────────────────────────────────────────────
+
     private function cmdShare(array $global, array $args): int
     {
         if (in_array('--help', $args, true) || in_array('-h', $args, true)) {
@@ -2404,62 +2696,72 @@ final class Application
      */
     private function shareUpdateCheck(): void
     {
+        $u = $this->ui();
+        $current = ApiClient::VERSION;
+
         if (getenv('JETTY_SKIP_UPDATE_NOTICE') === '1') {
+            $u->out('  '.$u->dim(str_pad('Version', 14)).'v'.$current);
+
             return;
         }
 
         $pharPath = \Phar::running(false);
+        $canCheck = true;
         if ($pharPath !== '' && $this->localPharUpdateUrl() !== null) {
-            return;
+            $canCheck = false;
         }
         if ($pharPath === '' && (! class_exists(InstalledVersions::class) || ! InstalledVersions::isInstalled('jetty/client'))) {
-            return;
+            $canCheck = false;
         }
 
-        $cachePath = $this->jettyUpdateNoticeCachePath();
-        if ($cachePath === '') {
-            return;
-        }
+        $latestTag = null;
+        $updateAvailable = false;
 
-        $now = time();
-        $cache = $this->readUpdateNoticeCache($cachePath);
-        $needRefresh = $cache === null || ($now - (int) ($cache['checked_at'] ?? 0)) >= 86400;
+        if ($canCheck) {
+            $cachePath = $this->jettyUpdateNoticeCachePath();
+            if ($cachePath !== '') {
+                $now = time();
+                $cache = $this->readUpdateNoticeCache($cachePath);
+                $needRefresh = $cache === null || ($now - (int) ($cache['checked_at'] ?? 0)) >= 86400;
 
-        if ($needRefresh) {
-            try {
-                $repo = $this->releasesRepo();
-                $token = $this->githubTokenForReleases();
-                $latest = GitHubPharRelease::latest($repo, $token);
-                if ($latest === null) {
-                    return;
+                if ($needRefresh) {
+                    try {
+                        $repo = $this->releasesRepo();
+                        $token = $this->githubTokenForReleases();
+                        $latest = GitHubPharRelease::latest($repo, $token);
+                        if ($latest !== null) {
+                            $remoteSemver = GitHubPharRelease::tagToSemver($latest['tag_name']);
+                            $cmp = version_compare($remoteSemver, $current);
+                            $cache = [
+                                'checked_at' => $now,
+                                'remote_tag' => $latest['tag_name'],
+                                'remote_semver' => $remoteSemver,
+                                'update_available' => $cmp > 0,
+                                'last_notice_at' => (int) ($cache['last_notice_at'] ?? 0),
+                                'last_notified_tag' => (string) ($cache['last_notified_tag'] ?? ''),
+                            ];
+                            $this->writeUpdateNoticeCache($cachePath, $cache);
+                        }
+                    } catch (\Throwable) {
+                        // Network error — show version without latest info.
+                    }
                 }
-                $remoteSemver = GitHubPharRelease::tagToSemver($latest['tag_name']);
-                $cmp = version_compare($remoteSemver, ApiClient::VERSION);
-                $cache = [
-                    'checked_at' => $now,
-                    'remote_tag' => $latest['tag_name'],
-                    'remote_semver' => $remoteSemver,
-                    'update_available' => $cmp > 0,
-                    'last_notice_at' => (int) ($cache['last_notice_at'] ?? 0),
-                    'last_notified_tag' => (string) ($cache['last_notified_tag'] ?? ''),
-                ];
-                $this->writeUpdateNoticeCache($cachePath, $cache);
-            } catch (\Throwable) {
-                return;
+
+                if ($cache !== null) {
+                    $latestTag = (string) ($cache['remote_tag'] ?? '');
+                    $updateAvailable = (bool) ($cache['update_available'] ?? false);
+                }
             }
         }
 
-        if (! ($cache['update_available'] ?? false)) {
-            return;
+        if ($updateAvailable && $latestTag !== '') {
+            $latestSemver = GitHubPharRelease::tagToSemver($latestTag);
+            $u->out('  '.$u->dim(str_pad('Version', 14)).'v'.$current.'  '.$u->yellow('update available: v'.$latestSemver.' — run: '.$u->cmd('jetty update')));
+        } elseif ($latestTag !== '') {
+            $u->out('  '.$u->dim(str_pad('Version', 14)).'v'.$current.'  '.$u->green('latest'));
+        } else {
+            $u->out('  '.$u->dim(str_pad('Version', 14)).'v'.$current);
         }
-
-        $tag = (string) ($cache['remote_tag'] ?? '');
-        if ($tag === '') {
-            return;
-        }
-
-        $u = $this->ui();
-        $u->warnLine('Update available: '.$tag.' (you have '.ApiClient::VERSION.') — run: '.$u->cmd('jetty update'));
     }
 
     /**
