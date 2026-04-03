@@ -125,7 +125,7 @@ Opt out of header rewriting: **`JETTY_SHARE_NO_LOCATION_REWRITE=1`**.
 
 **CLI (same run, overrides env):** **`jetty share --no-body-rewrite`**, **`--no-js-rewrite`**, **`--no-css-rewrite`**.
 
-**Edge WebSocket drops (“HTTP forwarding paused”):** Heartbeats use the REST API; the **agent** uses a separate **`wss://…/agent`** connection. If that socket goes idle, some proxies close it (~60s). The CLI sends a **WebSocket ping every 25s** to keep `/agent` alive; disable only for debugging with **`JETTY_SHARE_NO_WS_PING=1`**. If disconnects persist, raise **`proxy_read_timeout`** on nginx for the tunnel host (see Bridge edge deployment docs). Run **`jetty share` again** to reconnect the agent.
+**Edge WebSocket drops (“HTTP forwarding paused”):** Heartbeats use the REST API; the **agent** uses a separate **`wss://…/agent`** connection. The **PHP CLI sends a WebSocket ping every 25s**; disable with **`JETTY_SHARE_NO_WS_PING=1`**. On the **server**, run **`scripts/jetty-edge-nginx-install.sh`** (or **`install-jetty-edge.sh --nginx-site`**) from the Jetty repo so nginx applies long **`proxy_read_timeout`**, **`proxy_send_timeout`**, and **`proxy_buffering off`** for the tunnel zone; **`install-jetty-edge.sh --upgrade`** refreshes that nginx site automatically when **`jetty-edge-tunnels.conf`** is already installed. Run **`jetty share` again** to reconnect the agent after a drop.
 
 Dynamic JS (concatenated URLs) may still escape; list every host your app emits in **`JETTY_SHARE_REWRITE_HOSTS`**. Optional app-side tweaks (e.g. Laravel **`URL::forceRootUrl`**, Rails **`default_url_options`**, Next **`assetPrefix`**) can complement the agent but are not required.
 
