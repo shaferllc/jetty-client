@@ -484,6 +484,10 @@ final class EdgeAgent
 
                                 continue;
                             }
+                            TunnelResponseRewriter::emitDebugNdjson('edge.ws_http_request_frame', [
+                                'msg_num' => $msgNum,
+                                'raw_bytes' => strlen($raw),
+                            ]);
                             try {
                                 /** @var array<string, mixed> $req */
                                 $req = json_decode($raw, true, 512, JSON_THROW_ON_ERROR);
@@ -494,13 +498,28 @@ final class EdgeAgent
                                     'raw_bytes' => strlen($raw),
                                     'preview' => self::debugStringPreview($raw, 240),
                                 ]);
+                                TunnelResponseRewriter::emitDebugNdjson('edge.http_request_json_invalid', [
+                                    'msg_num' => $msgNum,
+                                    'error' => self::debugStringPreview($e->getMessage(), 300),
+                                    'raw_bytes' => strlen($raw),
+                                ]);
 
                                 continue;
                             }
                             $method = strtoupper((string) ($req['method'] ?? '?'));
                             $path = (string) ($req['path'] ?? '/');
                             $v('http_request #'.$msgNum.' '.$method.' '.$path.' → '.LocalUpstreamUrl::baseForCurl($localHost, $localPort).$path);
-                            $handled = self::handleHttpRequest($localHost, $localPort, $req, $rewriteOpts, $publicTunnelHostForRewrite, $agentDebug);
+                            try {
+                                $handled = self::handleHttpRequest($localHost, $localPort, $req, $rewriteOpts, $publicTunnelHostForRewrite, $agentDebug);
+                            } catch (\Throwable $e) {
+                                TunnelResponseRewriter::emitDebugNdjson('edge.http_request_handler_error', [
+                                    'msg_num' => $msgNum,
+                                    'request_id' => (string) ($req['request_id'] ?? ''),
+                                    'error_class' => $e::class,
+                                    'error_message' => self::debugStringPreview($e->getMessage(), 500),
+                                ]);
+                                throw $e;
+                            }
                             $outJson = json_encode($handled['response'], JSON_THROW_ON_ERROR);
                             $conn->sendText($outJson);
                             self::agentEmit($agentDebug, 'http_response_sent', [
@@ -646,6 +665,14 @@ final class EdgeAgent
             'edge_host' => $edgeHost ?? '',
             'edge_headers_redacted' => EdgeAgentDebug::redactSensitiveRequestHeaders($headers),
         ]);
+        TunnelResponseRewriter::emitDebugNdjson('edge.http_request_from_edge', [
+            'request_id' => $requestId,
+            'method' => $method,
+            'path' => $path,
+            'query_len' => strlen($query),
+            'edge_host' => $edgeHost ?? '',
+            'local_upstream' => $localHost.':'.$localPort,
+        ]);
 
         $hostPolicy = ShareUpstreamHostPolicy::fromEnvironment();
         if (! $hostPolicy->allows($localHost)) {
@@ -653,6 +680,11 @@ final class EdgeAgent
                 'request_id' => $requestId,
                 'stage' => 'upstream_host_policy',
                 'message' => $hostPolicy->denyMessage($localHost),
+            ]);
+            TunnelResponseRewriter::emitDebugNdjson('edge.http_upstream_skipped', [
+                'request_id' => $requestId,
+                'stage' => 'upstream_host_policy',
+                'local_upstream' => $localHost.':'.$localPort,
             ]);
 
             return [
@@ -668,6 +700,10 @@ final class EdgeAgent
                 'stage' => 'body_b64_decode',
                 'message' => 'invalid body_b64',
             ]);
+            TunnelResponseRewriter::emitDebugNdjson('edge.http_upstream_skipped', [
+                'request_id' => $requestId,
+                'stage' => 'body_b64_decode',
+            ]);
 
             return [
                 'response' => self::errorResponse($requestId, 502, 'invalid body_b64'),
@@ -680,11 +716,25 @@ final class EdgeAgent
             $target .= '?'.$query;
         }
 
+        TunnelResponseRewriter::emitDebugNdjson('edge.http_upstream_attempt', [
+            'request_id' => $requestId,
+            'method' => $method,
+            'path' => $path,
+            'target' => self::debugStringPreview($target, 768),
+            'localHost' => $localHost,
+            'localPort' => $localPort,
+        ]);
+
         $ch = curl_init($target);
         if ($ch === false) {
             self::agentEmit($agentDebug, 'http_upstream_error', [
                 'request_id' => $requestId,
                 'stage' => 'curl_init',
+            ]);
+            TunnelResponseRewriter::emitDebugNdjson('edge.http_upstream_skipped', [
+                'request_id' => $requestId,
+                'stage' => 'curl_init',
+                'target' => self::debugStringPreview($target, 768),
             ]);
 
             return [
@@ -737,6 +787,21 @@ final class EdgeAgent
                 'curl_error' => $err,
                 'upstream_ms' => $upstreamMs,
             ]);
+            $lookupFail = TunnelResponseRewriter::tunnelRewriteHostLookup($localHost);
+            $invCwdLog = getenv('JETTY_SHARE_INVOCATION_CWD');
+            $cliLog = getenv('JETTY_SHARE_CLI_UPSTREAM_HOSTNAME');
+            TunnelResponseRewriter::emitDebugNdjson('edge.http_upstream_curl_failed', [
+                'request_id' => $requestId,
+                'method' => $method,
+                'path' => $path,
+                'target' => self::debugStringPreview($target, 768),
+                'curl_errno' => $errno,
+                'curl_error' => self::debugStringPreview($err, 400),
+                'upstream_ms' => $upstreamMs,
+                'lookup_size' => count($lookupFail),
+                'invocation_cwd' => is_string($invCwdLog) && $invCwdLog !== '' ? $invCwdLog : null,
+                'cli_upstream_hostname' => is_string($cliLog) && trim($cliLog) !== '' ? trim($cliLog) : null,
+            ]);
 
             return [
                 'response' => self::errorResponse($requestId, 502, $err),
@@ -753,18 +818,28 @@ final class EdgeAgent
         $parsedHeaders = self::parseResponseHeaders($headerBlock);
         $beforeRedirectRewrite = $parsedHeaders;
         $lookup = TunnelResponseRewriter::tunnelRewriteHostLookup($localHost);
+        $rewriteRequestHeaders = TunnelResponseRewriter::requestHeadersWithRewriteTunnelHostFallback($headers, $publicTunnelHostForRewrite);
+        TunnelResponseRewriter::debugRewriteRequestContext($requestId, $method, $path, $localHost, $localPort, $rewriteRequestHeaders);
+        $outHeaders = TunnelResponseRewriter::rewriteRedirectHeaders($parsedHeaders, $rewriteRequestHeaders, $lookup);
         $invCwdLog = getenv('JETTY_SHARE_INVOCATION_CWD');
         $cliLog = getenv('JETTY_SHARE_CLI_UPSTREAM_HOSTNAME');
+        $locBefore = self::headerValueCi($parsedHeaders, 'Location')
+            ?? self::headerValueCi($parsedHeaders, 'X-Inertia-Location');
+        $locAfter = self::headerValueCi($outHeaders, 'Location')
+            ?? self::headerValueCi($outHeaders, 'X-Inertia-Location');
         TunnelResponseRewriter::emitDebugNdjson('edge.http_upstream_lookup', [
+            'request_id' => $requestId,
+            'method' => $method,
+            'path' => $path,
+            'http_status' => $status,
             'localHost' => $localHost,
             'localPort' => $localPort,
             'lookup_size' => count($lookup),
             'invocation_cwd' => is_string($invCwdLog) && $invCwdLog !== '' ? $invCwdLog : null,
             'cli_upstream_hostname' => is_string($cliLog) && trim($cliLog) !== '' ? trim($cliLog) : null,
+            'location_before' => $locBefore !== null ? self::debugStringPreview($locBefore, 512) : null,
+            'location_after' => $locAfter !== null ? self::debugStringPreview($locAfter, 512) : null,
         ]);
-        $rewriteRequestHeaders = TunnelResponseRewriter::requestHeadersWithRewriteTunnelHostFallback($headers, $publicTunnelHostForRewrite);
-        TunnelResponseRewriter::debugRewriteRequestContext($requestId, $method, $path, $localHost, $localPort, $rewriteRequestHeaders);
-        $outHeaders = TunnelResponseRewriter::rewriteRedirectHeaders($parsedHeaders, $rewriteRequestHeaders, $lookup);
         $bodyBeforeTunnelRewrite = $respBody;
         $respBody = TunnelResponseRewriter::maybeRewriteBody($respBody, $outHeaders, $rewriteRequestHeaders, $localHost, $rewriteOptions);
 

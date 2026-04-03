@@ -1876,6 +1876,14 @@ final class Application
                     ."  If your log still shows top-level sessionId/hypothesisId (no rewrite_debug_rev), rebuild the PHAR or run php bin/jetty from jetty-client.\n"
                 );
             }
+            if (is_string($ndjsonFile) && trim($ndjsonFile) !== '') {
+                TunnelResponseRewriter::emitDebugNdjson('jetty.share.ndjson_sink_ready', [
+                    'tunnel_id' => $id,
+                    'local_upstream' => $localHost.':'.$port,
+                    'public_tunnel_host' => $curlHost,
+                    'edge_agent_will_run' => ! $skipEdge && $ws !== '' && $agentToken !== '',
+                ]);
+            }
             $rewriteHostProbe = TunnelResponseRewriter::tunnelRewriteHostLookup($localHost);
             $rewriteHostProbeCount = count($rewriteHostProbe);
             if ($rewriteHostProbeCount <= 2 && filter_var($localHost, FILTER_VALIDATE_IP)) {

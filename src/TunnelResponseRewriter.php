@@ -15,7 +15,7 @@ use DOMXPath;
 final class TunnelResponseRewriter
 {
     /** Bumps when tunnel rewrite / NDJSON diagnostics change (verify you are not on a stale PHAR). */
-    public const REWRITE_DEBUG_REV = 4;
+    public const REWRITE_DEBUG_REV = 5;
 
     /** @var list<string> */
     private const DATA_URL_ATTRS = ['data-url', 'data-href', 'data-src', 'data-action'];
@@ -24,6 +24,8 @@ final class TunnelResponseRewriter
     private static ?array $walkUpAdjacentAppUrlHostsCache = null;
 
     private static string $walkUpAdjacentAppUrlHostsCacheKey = '';
+
+    private static bool $ndjsonAppendFailureLogged = false;
 
     /**
      * Logs one line per tunneled HTTP request when debug is enabled (env JETTY_SHARE_DEBUG_REWRITE=1).
@@ -800,7 +802,11 @@ final class TunnelResponseRewriter
         if ($line === false) {
             return;
         }
-        @file_put_contents($path, $line."\n", FILE_APPEND | LOCK_EX);
+        $written = @file_put_contents($path, $line."\n", FILE_APPEND | LOCK_EX);
+        if ($written === false && ! self::$ndjsonAppendFailureLogged) {
+            self::$ndjsonAppendFailureLogged = true;
+            @error_log('[jetty] JETTY_SHARE_DEBUG_NDJSON_FILE append failed (check permissions): '.$path);
+        }
     }
 
     /**
