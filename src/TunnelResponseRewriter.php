@@ -15,7 +15,7 @@ use DOMXPath;
 final class TunnelResponseRewriter
 {
     /** Bumps when tunnel rewrite / NDJSON diagnostics change (verify you are not on a stale PHAR). */
-    public const REWRITE_DEBUG_REV = 5;
+    public const REWRITE_DEBUG_REV = 8;
 
     /** @var list<string> */
     private const DATA_URL_ATTRS = ['data-url', 'data-href', 'data-src', 'data-action'];
@@ -42,7 +42,7 @@ final class TunnelResponseRewriter
     ): void {
         if (self::debugNdjsonLogPath() !== null) {
             $ge = getenv('JETTY_SHARE_DEBUG_REWRITE');
-            self::agentDebugNdjson('H1', 'TunnelResponseRewriter::debugRewriteRequestContext', [
+            self::agentDebugNdjson('request_context', 'TunnelResponseRewriter::debugRewriteRequestContext', [
                 'request_id' => $requestId,
                 'getenv_JETTY_SHARE_DEBUG_REWRITE' => $ge === false ? '(false)' : $ge,
                 'debugRewriteEnabled' => self::debugRewriteEnabled(),
@@ -68,12 +68,14 @@ final class TunnelResponseRewriter
      * @param  array<string, string>  $responseHeaders
      * @param  array<string, string>  $requestHeaders
      * @param  array<string, true>  $rewriteHostsLookup
+     * @param  string|null  $localHostForExposeFallback  Local upstream hostname (e.g. {@code beacon.test}); enables Expose-style substring rewrite when structured rewrite misses
      * @return array<string, string>
      */
     public static function rewriteRedirectHeaders(
         array $responseHeaders,
         array $requestHeaders,
         array $rewriteHostsLookup,
+        ?string $localHostForExposeFallback = null,
     ): array {
         if (getenv('JETTY_SHARE_NO_LOCATION_REWRITE') === '1') {
             if (self::debugRewriteEnabled()) {
@@ -99,13 +101,16 @@ final class TunnelResponseRewriter
             }
             $lookupKeys = array_keys($rewriteHostsLookup);
             sort($lookupKeys);
-            self::agentDebugNdjson('H2-H4-H5', 'TunnelResponseRewriter::rewriteRedirectHeaders:pre', [
+            $inDevLookup = $locHost !== '' && isset($rewriteHostsLookup[$locHost]);
+            $pointsAtTunnel = $locHost !== '' && $publicHost !== '' && strcasecmp($locHost, $publicHost) === 0;
+            self::agentDebugNdjson('redirect_preview', 'TunnelResponseRewriter::rewriteRedirectHeaders:pre', [
                 'publicHost' => $publicHost,
                 'no_location_rewrite' => getenv('JETTY_SHARE_NO_LOCATION_REWRITE') === '1',
                 'lookup_size' => count($rewriteHostsLookup),
                 'lookup_host_sample' => array_slice($lookupKeys, 0, 12),
                 'location_host' => $locHost,
-                'location_in_lookup' => $locHost !== '' && isset($rewriteHostsLookup[$locHost]),
+                'location_in_dev_host_lookup' => $inDevLookup,
+                'location_points_at_tunnel' => $pointsAtTunnel,
                 'location_preview' => self::truncateForLog($locForLog, 120),
                 'invocation_cwd' => self::shareInvocationDirectoryForAppUrl(),
                 'project_root_env_set' => getenv('JETTY_SHARE_PROJECT_ROOT') !== false,
@@ -126,9 +131,12 @@ final class TunnelResponseRewriter
                 }
                 $before = (string) $value;
                 if (strcasecmp($headerName, 'Refresh') === 0) {
-                    $rewritten = self::rewriteRefreshHeaderValue((string) $value, $rewriteHostsLookup, $publicHost, true);
+                    $rewritten = self::rewriteRefreshHeaderValue((string) $value, $rewriteHostsLookup, $publicHost, true, $localHostForExposeFallback);
                 } else {
                     $rewritten = self::rewriteAbsoluteUrlToTunnel((string) $value, $rewriteHostsLookup, $publicHost, true);
+                    if ($rewritten === null) {
+                        $rewritten = self::rewriteLocationExposeStyleSubstring((string) $value, $localHostForExposeFallback, $publicHost, true);
+                    }
                 }
                 if ($rewritten !== null) {
                     $responseHeaders[$name] = $rewritten;
@@ -147,7 +155,7 @@ final class TunnelResponseRewriter
     /**
      * @param  array<string, true>  $rewriteHostsLookup
      */
-    public static function rewriteRefreshHeaderValue(string $value, array $rewriteHostsLookup, string $tunnelHostLower, bool $debugRedirect = false): ?string
+    public static function rewriteRefreshHeaderValue(string $value, array $rewriteHostsLookup, string $tunnelHostLower, bool $debugRedirect = false, ?string $localHostForExposeFallback = null): ?string
     {
         $value = trim($value);
         if ($value === '') {
@@ -161,6 +169,9 @@ final class TunnelResponseRewriter
         }
         $urlPart = trim($m[1], " \t\"'");
         $rewritten = self::rewriteAbsoluteUrlToTunnel($urlPart, $rewriteHostsLookup, $tunnelHostLower, $debugRedirect);
+        if ($rewritten === null) {
+            $rewritten = self::rewriteLocationExposeStyleSubstring($urlPart, $localHostForExposeFallback, $tunnelHostLower, $debugRedirect);
+        }
         if ($rewritten === null) {
             return null;
         }
@@ -347,9 +358,18 @@ final class TunnelResponseRewriter
     public static function rewriteAbsoluteUrlToTunnel(string $value, array $rewriteHostsLookup, string $tunnelHostLower, bool $debugRedirect = false): ?string
     {
         $value = trim($value);
-        if ($value === '' || ($value[0] ?? '') === '/') {
+        if ($value === '') {
             if ($debugRedirect && self::debugRewriteEnabled()) {
-                self::debugRewriteLine('absolute_url: skip empty or root-relative '.self::truncateForLog($value));
+                self::debugRewriteLine('absolute_url: skip empty '.self::truncateForLog($value));
+            }
+
+            return null;
+        }
+        // Root-relative "/path" must not be rewritten (browser resolves against current host).
+        // Protocol-relative "//beacon.test/path" is absolute and must be rewritten like https://….
+        if (str_starts_with($value, '/') && ! str_starts_with($value, '//')) {
+            if ($debugRedirect && self::debugRewriteEnabled()) {
+                self::debugRewriteLine('absolute_url: skip root-relative '.self::truncateForLog($value));
             }
 
             return null;
@@ -381,6 +401,87 @@ final class TunnelResponseRewriter
         $fragment = isset($parts['fragment']) && $parts['fragment'] !== '' ? '#'.$parts['fragment'] : '';
 
         return 'https://'.$tunnelHostLower.$path.$query.$fragment;
+    }
+
+    /**
+     * Expose-style fallback: case-insensitive substring replace of primary upstream hostname(s) in the full URL,
+     * only accepted when the result parses as {@code https://{tunnelHost}/…}. Catches edge cases where the
+     * walk-up host lookup missed {@code APP_URL} but {@code --site} still names the vhost. Opt out with
+     * {@code JETTY_SHARE_NO_EXPOSE_STYLE_LOCATION=1}.
+     *
+     * @param  list<string>  $primaryHostsLower
+     */
+    public static function rewriteLocationExposeStyleSubstring(
+        string $location,
+        ?string $localHostForExposeFallback,
+        string $tunnelHostLower,
+        bool $debugRedirect = false,
+    ): ?string {
+        if (getenv('JETTY_SHARE_NO_EXPOSE_STYLE_LOCATION') === '1') {
+            return null;
+        }
+        $tunnelHostLower = strtolower(trim($tunnelHostLower));
+        if ($tunnelHostLower === '') {
+            return null;
+        }
+        $primaryHostsLower = self::primaryUpstreamHostLabelsForExposeFallback($localHostForExposeFallback);
+        if ($primaryHostsLower === []) {
+            return null;
+        }
+        $location = trim($location);
+        if ($location === '') {
+            return null;
+        }
+        usort($primaryHostsLower, fn (string $a, string $b): int => strlen($b) <=> strlen($a));
+        foreach ($primaryHostsLower as $from) {
+            if ($from === '' || $from === $tunnelHostLower) {
+                continue;
+            }
+            if (stripos($location, $from) === false) {
+                continue;
+            }
+            $candidate = str_ireplace($from, $tunnelHostLower, $location);
+            if ($candidate === $location) {
+                continue;
+            }
+            if (str_contains($candidate, '://https://') || str_contains($candidate, '://http://')) {
+                continue;
+            }
+            $newHost = parse_url($candidate, PHP_URL_HOST);
+            if (! is_string($newHost) || strtolower($newHost) !== $tunnelHostLower) {
+                continue;
+            }
+            if ($debugRedirect && self::debugRewriteEnabled()) {
+                self::debugRewriteLine('expose_style_location: '.self::truncateForLog($location).' -> '.self::truncateForLog($candidate));
+            }
+
+            return $candidate;
+        }
+
+        return null;
+    }
+
+    /**
+     * @return list<string>
+     */
+    private static function primaryUpstreamHostLabelsForExposeFallback(?string $localHostForExposeFallback): array
+    {
+        $seen = [];
+        $add = function (string $h) use (&$seen): void {
+            $h = strtolower(trim($h));
+            if ($h !== '') {
+                $seen[$h] = true;
+            }
+        };
+        if (is_string($localHostForExposeFallback)) {
+            $add($localHostForExposeFallback);
+        }
+        $cli = getenv('JETTY_SHARE_CLI_UPSTREAM_HOSTNAME');
+        if (is_string($cli)) {
+            $add(trim($cli));
+        }
+
+        return array_keys($seen);
     }
 
     /**
@@ -812,11 +913,11 @@ final class TunnelResponseRewriter
     /**
      * @param  array<string, mixed>  $data
      */
-    private static function agentDebugNdjson(string $hypothesisId, string $location, array $data): void
+    private static function agentDebugNdjson(string $segment, string $location, array $data): void
     {
         $cli = getenv('JETTY_SHARE_CLI_UPSTREAM_HOSTNAME');
-        self::emitDebugNdjson('rewrite.'.$hypothesisId, array_merge($data, [
-            'hypothesisId' => $hypothesisId,
+        self::emitDebugNdjson('rewrite.'.$segment, array_merge($data, [
+            'segment' => $segment,
             'location' => $location,
             'cli_upstream_hostname' => is_string($cli) && trim($cli) !== '' ? trim($cli) : null,
         ]));

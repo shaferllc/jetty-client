@@ -39,6 +39,28 @@ final class TunnelResponseRewriterTest extends TestCase
         $this->assertNull($out);
     }
 
+    public function test_rewrite_protocol_relative_url_to_tunnel(): void
+    {
+        $lookup = ['beacon.test' => true];
+        $out = TunnelResponseRewriter::rewriteAbsoluteUrlToTunnel(
+            '//beacon.test/dashboard?x=1',
+            $lookup,
+            'cove-kfkt2nyd.tunnels.usejetty.online'
+        );
+        $this->assertSame('https://cove-kfkt2nyd.tunnels.usejetty.online/dashboard?x=1', $out);
+    }
+
+    public function test_rewrite_root_relative_path_not_rewritten(): void
+    {
+        $lookup = ['beacon.test' => true];
+        $out = TunnelResponseRewriter::rewriteAbsoluteUrlToTunnel(
+            '/dashboard',
+            $lookup,
+            'cove-kfkt2nyd.tunnels.usejetty.online'
+        );
+        $this->assertNull($out);
+    }
+
     public function test_refresh_header_rewrite(): void
     {
         $lookup = ['127.0.0.1' => true];
@@ -57,9 +79,39 @@ final class TunnelResponseRewriterTest extends TestCase
         $res = TunnelResponseRewriter::rewriteRedirectHeaders([
             'Location' => 'https://127.0.0.1:8000/',
             'Refresh' => '0; url=https://127.0.0.1:8000/x',
-        ], $req, $lookup);
+        ], $req, $lookup, '127.0.0.1');
         $this->assertSame('https://t.tunnels.x/', $res['Location']);
         $this->assertSame('0; url=https://t.tunnels.x/x', $res['Refresh']);
+    }
+
+    public function test_expose_style_location_fallback_when_host_missing_from_lookup(): void
+    {
+        $lookup = ['other.test' => true];
+        $req = ['Host' => 'lbl.tunnels.example'];
+        $res = TunnelResponseRewriter::rewriteRedirectHeaders([
+            'Location' => 'https://beacon.test/dashboard',
+        ], $req, $lookup, 'beacon.test');
+        $this->assertSame('https://lbl.tunnels.example/dashboard', $res['Location']);
+    }
+
+    public function test_expose_style_location_fallback_respects_opt_out_env(): void
+    {
+        $prev = getenv('JETTY_SHARE_NO_EXPOSE_STYLE_LOCATION');
+        putenv('JETTY_SHARE_NO_EXPOSE_STYLE_LOCATION=1');
+        try {
+            $lookup = ['other.test' => true];
+            $req = ['Host' => 'lbl.tunnels.example'];
+            $res = TunnelResponseRewriter::rewriteRedirectHeaders([
+                'Location' => 'https://beacon.test/dashboard',
+            ], $req, $lookup, 'beacon.test');
+            $this->assertSame('https://beacon.test/dashboard', $res['Location']);
+        } finally {
+            if ($prev === false) {
+                putenv('JETTY_SHARE_NO_EXPOSE_STYLE_LOCATION');
+            } else {
+                putenv('JETTY_SHARE_NO_EXPOSE_STYLE_LOCATION='.$prev);
+            }
+        }
     }
 
     public function test_maybe_rewrite_body_html_href(): void

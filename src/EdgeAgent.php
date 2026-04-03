@@ -820,7 +820,7 @@ final class EdgeAgent
         $lookup = TunnelResponseRewriter::tunnelRewriteHostLookup($localHost);
         $rewriteRequestHeaders = TunnelResponseRewriter::requestHeadersWithRewriteTunnelHostFallback($headers, $publicTunnelHostForRewrite);
         TunnelResponseRewriter::debugRewriteRequestContext($requestId, $method, $path, $localHost, $localPort, $rewriteRequestHeaders);
-        $outHeaders = TunnelResponseRewriter::rewriteRedirectHeaders($parsedHeaders, $rewriteRequestHeaders, $lookup);
+        $outHeaders = TunnelResponseRewriter::rewriteRedirectHeaders($parsedHeaders, $rewriteRequestHeaders, $lookup, $localHost);
         $invCwdLog = getenv('JETTY_SHARE_INVOCATION_CWD');
         $cliLog = getenv('JETTY_SHARE_CLI_UPSTREAM_HOSTNAME');
         $locBefore = self::headerValueCi($parsedHeaders, 'Location')
