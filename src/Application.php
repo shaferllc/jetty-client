@@ -2490,7 +2490,7 @@ TXT;
   JETTY_REGION               Same as --region= (regional Bridge host)
   JETTY_BRIDGE_URL           Override Bridge root when JETTY_API_URL unset
   JETTY_ONBOARD_BRIDGE_URL   Same, for onboarding only
-  JETTY_ALLOW_LOCAL_BRIDGE=1 Allow localhost/127.0.0.1 in saved api_url and bootstrap candidates (self-hosted dev)
+  JETTY_ALLOW_LOCAL_BRIDGE=1 Allow localhost/127.0.0.1 in saved api_url and bootstrap candidates (local Bridge dev)
   JETTY_CLI_LOCAL_URL        Optional extra bootstrap URL
   JETTY_CLI_DEV_URL          Optional extra bootstrap URL
   JETTY_CLI_BOOTSTRAP_FALLBACKS   Comma-separated extra Bridge roots to try

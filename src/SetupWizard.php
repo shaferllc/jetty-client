@@ -114,9 +114,9 @@ final class SetupWizard
             foreach ($candidates as $u) {
                 self::out('  • '.$u);
             }
-            self::out('Try: export JETTY_BRIDGE_URL=https://usejetty.online   # or your self-hosted Bridge');
+            self::out('Try: export JETTY_BRIDGE_URL=https://usejetty.online   # or your Bridge base URL');
             self::out('     jetty config clear api-url');
-            self::out('Self-hosted dev: JETTY_ALLOW_LOCAL_BRIDGE=1 to allow http://127.0.0.1 / localhost as your Bridge URL.');
+            self::out('Local Bridge dev: JETTY_ALLOW_LOCAL_BRIDGE=1 to allow http://127.0.0.1 / localhost as your Bridge URL.');
 
             throw new \InvalidArgumentException('No reachable Bridge for onboarding.');
         }

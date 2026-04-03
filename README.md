@@ -155,7 +155,7 @@ The **Jetty Bridge** web app (Laravel) ships long-form docs you should read when
 
 | Topic | Where |
 |--------|--------|
-| **Architecture** (Bridge, jetty-edge, CLI, WebSocket frames) | [Tunnels: CLI and Bridge reference](https://usejetty.online/docs/getting-started/tunnels-reference) — replace host with your Bridge if self-hosted |
+| **Architecture** (Bridge, jetty-edge, CLI, WebSocket frames) | [Tunnels: CLI and Bridge reference](https://usejetty.online/docs/getting-started/tunnels-reference) — use your Bridge base URL if it isn’t the default host |
 | **Quick recipes** (port, `--site`, Valet TLS) | [Sharing local sites](https://usejetty.online/docs/getting-started/sharing) |
 | **Install** | [Installation](https://usejetty.online/docs/getting-started/installation) |
 | **Operators** (edge binary, nginx, secrets) | Signed-in: *Network and edge deployment* in the dashboard |
