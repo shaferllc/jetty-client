@@ -557,7 +557,42 @@ final class TunnelResponseRewriter
 
     private static function debugRewriteEnabled(): bool
     {
-        return getenv('JETTY_SHARE_DEBUG_REWRITE') === '1';
+        $raw = self::envRawFirstNonEmpty([
+            'JETTY_SHARE_DEBUG_REWRITE',
+        ]);
+        if ($raw === null) {
+            return false;
+        }
+
+        return self::envTruthyString($raw);
+    }
+
+    /**
+     * @param  list<non-empty-string>  $keys
+     */
+    private static function envRawFirstNonEmpty(array $keys): ?string
+    {
+        foreach ($keys as $key) {
+            $v = getenv($key);
+            if (is_string($v) && trim($v) !== '') {
+                return $v;
+            }
+            if (isset($_SERVER[$key]) && is_string($_SERVER[$key]) && trim($_SERVER[$key]) !== '') {
+                return $_SERVER[$key];
+            }
+            if (isset($_ENV[$key]) && is_string($_ENV[$key]) && trim($_ENV[$key]) !== '') {
+                return $_ENV[$key];
+            }
+        }
+
+        return null;
+    }
+
+    private static function envTruthyString(string $raw): bool
+    {
+        $v = strtolower(trim($raw));
+
+        return $v === '1' || $v === 'true' || $v === 'yes' || $v === 'on';
     }
 
     private static function debugRewriteLine(string $line): void

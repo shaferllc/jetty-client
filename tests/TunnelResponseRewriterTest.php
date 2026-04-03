@@ -142,4 +142,28 @@ final class TunnelResponseRewriterTest extends TestCase
             }
         }
     }
+
+    public function test_debug_rewrite_enabled_reads_server_when_getenv_unset(): void
+    {
+        $key = 'JETTY_SHARE_DEBUG_REWRITE';
+        $prevGetenv = getenv($key);
+        $prevServer = $_SERVER[$key] ?? null;
+        putenv($key);
+        $_SERVER[$key] = '1';
+
+        try {
+            $m = new \ReflectionMethod(TunnelResponseRewriter::class, 'debugRewriteEnabled');
+            $this->assertTrue($m->invoke(null));
+        } finally {
+            unset($_SERVER[$key]);
+            if ($prevServer !== null) {
+                $_SERVER[$key] = $prevServer;
+            }
+            if ($prevGetenv !== false) {
+                putenv($key.'='.$prevGetenv);
+            } else {
+                putenv($key);
+            }
+        }
+    }
 }
