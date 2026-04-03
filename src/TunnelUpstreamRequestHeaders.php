@@ -10,13 +10,14 @@ namespace JettyCli;
  * The edge forwards the public tunnel hostname as {@code Host}. Valet, Herd, and typical nginx
  * vhosts match {@code server_name} against {@code Host}; leaving the tunnel host in place yields
  * the wrong vhost (often 404). We send {@code Host} for the configured local site and preserve
- * the original hostname in {@code X-Forwarded-Host} for frameworks that care.
+ * the original hostname in {@code X-Forwarded-Host} for frameworks that care. Standard ports
+ * {@code 80} and {@code 443} omit the port suffix (browser-style).
  */
 final class TunnelUpstreamRequestHeaders
 {
     /**
      * @param  array<string, string>  $edgeHeaders  Headers from the edge {@code http_request} frame
-     * @return array<string, string> Headers to pass to curl toward {@code http://localHost:localPort}
+     * @return array<string, string> Headers to pass to curl toward the local origin (HTTP, or HTTPS when {@code localPort} is 443)
      */
     public static function forLocalUpstream(array $edgeHeaders, string $localHost, int $localPort): array
     {
@@ -51,7 +52,7 @@ final class TunnelUpstreamRequestHeaders
 
     public static function upstreamHostHeaderValue(string $localHost, int $localPort): string
     {
-        if ($localPort === 80) {
+        if ($localPort === 80 || $localPort === 443) {
             return $localHost;
         }
 

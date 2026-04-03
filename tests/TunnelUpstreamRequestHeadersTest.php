@@ -32,6 +32,16 @@ final class TunnelUpstreamRequestHeadersTest extends TestCase
         $this->assertSame('lbl.tunnels.example.test', $out['X-Forwarded-Host']);
     }
 
+    public function test_443_upstream_host_omits_port_suffix(): void
+    {
+        $out = TunnelUpstreamRequestHeaders::forLocalUpstream([
+            'Host' => 'lbl.tunnels.example.test',
+        ], 'beacon.test', 443);
+
+        $this->assertSame('beacon.test', $out['Host']);
+        $this->assertSame('lbl.tunnels.example.test', $out['X-Forwarded-Host']);
+    }
+
     public function test_does_not_set_x_forwarded_host_when_already_matches_upstream(): void
     {
         $out = TunnelUpstreamRequestHeaders::forLocalUpstream([

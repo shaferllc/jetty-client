@@ -888,13 +888,6 @@ final class LocalDevDetector
 
         $port = $explicitPort ?? ($scheme === 'https' ? 443 : 80);
 
-        if ($explicitPort === null && ($scheme === 'https' || $port === 443)) {
-            if (self::isProbablyLocalDevTld($host) && self::tcpAccepts($host, 80)) {
-                $port = 80;
-                $scheme = 'http';
-            }
-        }
-
         if (! self::tcpAccepts($host, $port)) {
             if ($explicitPort === null && $scheme === 'https' && self::tcpAccepts($host, 80)) {
                 $port = 80;

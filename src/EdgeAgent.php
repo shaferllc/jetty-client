@@ -449,7 +449,7 @@ final class EdgeAgent
                             }
                             $method = strtoupper((string) ($req['method'] ?? '?'));
                             $path = (string) ($req['path'] ?? '/');
-                            $v('http_request #'.$msgNum.' '.$method.' '.$path.' → http://'.$localHost.':'.$localPort.$path);
+                            $v('http_request #'.$msgNum.' '.$method.' '.$path.' → '.LocalUpstreamUrl::baseForCurl($localHost, $localPort).$path);
                             $handled = self::handleHttpRequest($localHost, $localPort, $req, $rewriteOpts, $publicTunnelHostForRewrite, $agentDebug);
                             $outJson = json_encode($handled['response'], JSON_THROW_ON_ERROR);
                             $conn->sendText($outJson);
@@ -611,7 +611,7 @@ final class EdgeAgent
             ];
         }
 
-        $target = 'http://'.$localHost.':'.$localPort.$path;
+        $target = LocalUpstreamUrl::baseForCurl($localHost, $localPort).$path;
         if ($query !== '') {
             $target .= '?'.$query;
         }

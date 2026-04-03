@@ -2282,7 +2282,7 @@ final class Application
         return $this->shareUsageSummary().<<<'TXT'
 
 
-  port  Optional. If omitted: auto-detect upstream from cwd (Laravel APP_URL, Herd/Valet links, DDEV, Docker Compose, Vite/Next/etc., or .env PORT), else scan common dev ports on 127.0.0.1. With --site=HOSTNAME (not 127.0.0.1), port defaults to 80 first when open (Valet/Herd); pass an explicit port (e.g. 8000) for php artisan serve only.
+  port  Optional. If omitted: auto-detect upstream from cwd (Laravel APP_URL, Herd/Valet links, DDEV, Docker Compose, Vite/Next/etc., or .env PORT), else scan common dev ports on 127.0.0.1. With --site=HOSTNAME (not 127.0.0.1), tries :443 then :80 when open (Valet/Herd TLS first — avoids HTTP→HTTPS redirect loops); pass an explicit port (e.g. 8000) for php artisan serve only.
   --host= / --site= / --bind= / --local= / --local-host=  Upstream hostname or IP (default 127.0.0.1).
   --serve[=DIR]  Start PHP’s built-in server (default docroot: ./public if present, else cwd) and tunnel to it; optional port as first arg.
   --no-detect    Skip local-dev auto-detection (use plain 127.0.0.1 + port scan). Env: JETTY_SHARE_NO_DETECT=1
@@ -2302,8 +2302,8 @@ TXT;
     }
 
     /**
-     * Valet/Herd/DDEV-style hostnames are served on :80; scanning 8000 first picked the wrong process when
-     * another app had a dev server open. Prefer :80 for non-loopback, non-IP hosts when inferring port.
+     * Valet/Herd-style hostnames (non-loopback, non-IP): prefer :443 then :80 before scanning common
+     * dev ports, so TLS matches secured local sites and avoids HTTP→HTTPS redirect loops in tunnels.
      */
     private static function shareUpstreamHostPrefersStandardWebPort(string $localHost): bool
     {
@@ -2330,15 +2330,20 @@ TXT;
 
         $common = [8000, 3000, 5173, 8080, 5000, 4000, 8765, 8888];
         if (self::shareUpstreamHostPrefersStandardWebPort($localHost)) {
-            $common = array_merge([80], $common);
+            // Prefer :443 first: Valet/Herd often redirect http://site → https://site; tunneling :80
+            // yields 301→tunnel URL→301 loops. HTTPS upstream avoids that.
+            $common = array_merge([443, 80], $common);
         }
 
         foreach ($common as $p) {
             if (! $this->tcpPortAcceptsConnections($localHost, $p)) {
                 continue;
             }
+            if ($p === 443 && self::shareUpstreamHostPrefersStandardWebPort($localHost)) {
+                return [$p, 'Local port: 443 (auto — TLS preferred for this hostname to avoid HTTP→HTTPS redirect loops through the tunnel; override with e.g. `jetty share 80 --site='.$localHost.'` if you need plain HTTP).'];
+            }
             if ($p === 80 && self::shareUpstreamHostPrefersStandardWebPort($localHost)) {
-                return [$p, 'Local port: 80 (auto — hostname looks like Valet/Herd; override with e.g. `jetty share 8000 --site='.$localHost.'` if you use php artisan serve only).'];
+                return [$p, 'Local port: 80 (auto — :443 not accepting connections; using HTTP. Secured Valet/Herd sites may redirect — use `https://` in APP_URL / `JETTY_SHARE_UPSTREAM` or ensure :443 is listening).'];
             }
 
             return [$p, 'Local port: '.$p.' (auto — first responding port among common dev servers).'];
@@ -2376,7 +2381,7 @@ TXT;
             return;
         }
 
-        $url = 'http://'.$localHost.':'.$port.$path;
+        $url = LocalUpstreamUrl::baseForCurl($localHost, $port).$path;
         $ch = curl_init($url);
         if ($ch === false) {
             throw new \RuntimeException('upstream health check: curl_init failed for '.$url);
