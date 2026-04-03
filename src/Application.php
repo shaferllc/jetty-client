@@ -47,8 +47,7 @@ final class Application
 
             $code = match ($command) {
                 'version', '--version', '-V' => $this->cmdVersion($rest),
-                'update', 'self-update' => $this->cmdSelfUpdate($rest),
-                'global-update' => $this->cmdGlobalUpdate($rest),
+                'update', 'self-update', 'global-update' => $this->cmdSelfUpdate($rest),
                 'install-client' => $this->cmdInstallClient($rest),
                 'list' => $this->cmdList($global, $rest),
                 'replay' => $this->cmdReplay($global, $rest),
@@ -336,177 +335,6 @@ final class Application
         }
 
         return $this->updateComposerJettyClient($args);
-    }
-
-    /**
-     * Update Composer global and/or a global PHAR path (not the current project’s vendor install).
-     *
-     * @param  list<string>  $args
-     */
-    private function cmdGlobalUpdate(array $args): int
-    {
-        $onlyComposer = false;
-        $onlyPhar = false;
-        $pass = [];
-        foreach ($args as $a) {
-            if ($a === '--composer') {
-                $onlyComposer = true;
-
-                continue;
-            }
-            if ($a === '--phar') {
-                $onlyPhar = true;
-
-                continue;
-            }
-            if (in_array($a, ['--check', '--force'], true)) {
-                $pass[] = $a;
-
-                continue;
-            }
-            throw new \InvalidArgumentException(
-                'Usage: jetty global-update [--composer] [--phar] [--check] [--force]'."\n"
-                .'  Default: update Composer global jetty/client (if installed) and/or PHAR at JETTY_PHAR_PATH or ~/.local/bin/jetty (if present).'."\n"
-                .'  --composer  Only run composer global update jetty/client'."\n"
-                .'  --phar      Only update the global PHAR file'."\n"
-                .'  --check     Show outdated / dry-run (same as jetty update --check)'."\n"
-                .'  --force     Pass --no-cache to Composer; re-download PHAR even if semver matches'
-            );
-        }
-
-        if ($onlyComposer && $onlyPhar) {
-            throw new \InvalidArgumentException('Use only one of --composer or --phar, or omit both to update every global target that exists.');
-        }
-
-        $wantComposer = ! $onlyPhar;
-        $wantPhar = ! $onlyComposer;
-
-        $hasComposer = $this->isGlobalComposerJettyInstalled();
-        $pharPath = $this->resolveGlobalPharPathForUpdate();
-
-        if ($wantComposer && ! $hasComposer) {
-            if ($onlyComposer) {
-                throw new \RuntimeException(
-                    'jetty/client is not installed globally. Run: composer global require jetty/client'
-                );
-            }
-            $this->stdout('Skipping Composer global: jetty/client is not installed (composer global show jetty/client).');
-        }
-
-        if ($wantPhar && $pharPath === null) {
-            if ($onlyPhar) {
-                throw new \RuntimeException(
-                    'No global PHAR found. Set JETTY_PHAR_PATH=/path/to/jetty.phar or install to ~/.local/bin/jetty'
-                );
-            }
-            $this->stdout('Skipping PHAR: no file at JETTY_PHAR_PATH or ~/.local/bin/jetty.');
-        }
-
-        $didSomething = false;
-        $exit = 0;
-
-        if ($wantComposer && $hasComposer) {
-            $r = $this->updateComposerGlobalJettyClient($pass);
-            if ($r !== 0) {
-                $exit = $r;
-            }
-            $didSomething = true;
-        }
-
-        if ($wantPhar && $pharPath !== null) {
-            if ($didSomething) {
-                $this->stdout('');
-            }
-            $this->stdout('Global PHAR target: '.$pharPath);
-            $this->updatePharInPlace($pass, $pharPath);
-            $didSomething = true;
-        }
-
-        if (! $didSomething) {
-            throw new \RuntimeException(
-                'Nothing to update: install Composer global jetty/client and/or a PHAR at ~/.local/bin/jetty (see jetty help).'
-            );
-        }
-
-        return $exit;
-    }
-
-    /**
-     * @param  list<string>  $args  --check, --force
-     */
-    private function updateComposerGlobalJettyClient(array $args): int
-    {
-        $composer = self::resolveComposerBinary();
-        $home = getenv('HOME') ?: getenv('USERPROFILE');
-        if (! is_string($home) || $home === '') {
-            throw new \RuntimeException('Cannot resolve home directory for composer global.');
-        }
-
-        $checkOnly = in_array('--check', $args, true);
-        $force = in_array('--force', $args, true);
-
-        if ($checkOnly) {
-            $this->stdout('Install: Composer global');
-            $code = self::runComposerInDirectory($home, $composer, ['global', 'show', 'jetty/client', '--no-ansi']);
-            if ($code !== 0) {
-                $this->stdout('jetty/client is not installed globally. Run: composer global require jetty/client');
-
-                return 1;
-            }
-            self::runComposerInDirectory($home, $composer, ['global', 'outdated', 'jetty/client', '--direct', '--no-ansi']);
-
-            return 0;
-        }
-
-        $cmd = ['global', 'update', 'jetty/client', '--no-interaction'];
-        if ($force) {
-            $cmd[] = '--no-cache';
-            $cmd[] = '--with-all-dependencies';
-        }
-
-        $code = self::runComposerInDirectory($home, $composer, $cmd);
-        if ($code !== 0) {
-            throw new \RuntimeException(
-                'composer '.implode(' ', $cmd).' failed (exit '.$code.'). Try: composer global update jetty/client'
-            );
-        }
-
-        $this->stdout('Updated jetty/client via Composer global. Run jetty version to confirm (use the global vendor/bin/jetty on PATH).');
-        $this->emitPostUpdateConfigTip();
-
-        return 0;
-    }
-
-    private function isGlobalComposerJettyInstalled(): bool
-    {
-        try {
-            $composer = self::resolveComposerBinary();
-        } catch (\Throwable) {
-            return false;
-        }
-        $home = getenv('HOME') ?: getenv('USERPROFILE');
-        if (! is_string($home) || $home === '') {
-            return false;
-        }
-
-        return self::runComposerInDirectory($home, $composer, ['global', 'show', 'jetty/client', '--no-ansi']) === 0;
-    }
-
-    private function resolveGlobalPharPathForUpdate(): ?string
-    {
-        $env = getenv('JETTY_PHAR_PATH');
-        if (is_string($env) && $env !== '' && is_file($env)) {
-            return $env;
-        }
-        $home = getenv('HOME') ?: getenv('USERPROFILE');
-        if (is_string($home) && $home !== '') {
-            $p = $home.\DIRECTORY_SEPARATOR.'.local'.\DIRECTORY_SEPARATOR.'bin'.\DIRECTORY_SEPARATOR.'jetty';
-            if (is_file($p)) {
-                return $p;
-            }
-        }
-
-        return null;
     }
 
     /**
@@ -3273,7 +3101,7 @@ TXT;
             ['jetty logout', 'Clear saved token only'],
             ['jetty reset', 'Clear all local Jetty CLI settings'],
             ['jetty version [--install] [--check-update]', 'Show version and install kind'],
-            ['jetty update | jetty global-update', 'Update PHAR and/or Composer global package'],
+            ['jetty update', 'Update to the latest version (PHAR or Composer)'],
             ['jetty doctor', 'Find duplicate installs, check version, clean up'],
         ]);
         $u->out('');
@@ -3336,9 +3164,7 @@ Commands:
   jetty version [--machine] [--install] [--check-update]
     --machine: semver only (scripts)  --install: how this binary was installed + update hint
     --check-update: PHAR→GitHub; Composer→Packagist (same as jetty update --check)
-  jetty update [--check] [--force]   Updates this binary’s install (PHAR file or project/global Composer)
-  jetty global-update [--composer|--phar] [--check] [--force]
-    Update Composer global jetty/client and/or PHAR at JETTY_PHAR_PATH or ~/.local/bin/jetty (default: both if present)
+  jetty update [--check] [--force]   Update to the latest version (auto-detects PHAR or Composer)
   jetty install-client       composer require jetty/client in the current project (useful with a global jetty on PATH)
   jetty onboard              (see also: plain `jetty` when no token)
   jetty setup
@@ -3356,8 +3182,7 @@ Commands:
 
 Install: composer require jetty/client  (or: composer global require jetty/client — put Composer’s global vendor/bin on PATH)
   Same config (~/.config/jetty/config.json) for PHAR and Composer. Releases: one “Release CLI” workflow ships the PHAR on GitHub and the same version to Packagist — bump once, not twice.
-  Day to day: pick one binary (PHAR or Composer); jetty update only upgrades the copy you run (see jetty version --install).
-  jetty global-update updates Composer global jetty/client and/or a PHAR at ~/.local/bin/jetty (or JETTY_PHAR_PATH) — from a project vendor/bin/jetty too.
+  Day to day: pick one binary (PHAR or Composer); jetty update upgrades the copy you run. Use jetty doctor to find and clean up duplicate installs.
 
 TXT;
     }
