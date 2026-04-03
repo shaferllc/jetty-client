@@ -1082,6 +1082,23 @@ final class Application
 
             return;
         }
+        // Traffic log lines: "  GET /path 200 12.3kB 45ms"
+        if (preg_match('/^\s+(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\s+\S+\s+(\d{3})\s/', $m, $match)) {
+            $status = (int) $match[2];
+            $colored = $m;
+            if ($status >= 500) {
+                $colored = $u->red($m);
+            } elseif ($status >= 400) {
+                $colored = $u->yellow($m);
+            } elseif ($status >= 300) {
+                $colored = $u->cyan($m);
+            } else {
+                $colored = $u->dim($m);
+            }
+            $u->err($colored);
+
+            return;
+        }
         $u->err($m);
     }
 

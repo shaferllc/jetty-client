@@ -508,6 +508,7 @@ final class EdgeAgent
                             }
                             $method = strtoupper((string) ($req['method'] ?? '?'));
                             $path = (string) ($req['path'] ?? '/');
+                            $requestStartMs = (int) round(microtime(true) * 1000);
                             $v('http_request #'.$msgNum.' '.$method.' '.$path.' → '.LocalUpstreamUrl::baseForCurl($localHost, $localPort).$path);
                             try {
                                 $handled = self::handleHttpRequest($localHost, $localPort, $req, $rewriteOpts, $publicTunnelHostForRewrite, $agentDebug);
@@ -522,13 +523,16 @@ final class EdgeAgent
                             }
                             $outJson = json_encode($handled['response'], JSON_THROW_ON_ERROR);
                             $conn->sendText($outJson);
+                            $respStatus = (int) ($handled['response']['status'] ?? 0);
                             self::agentEmit($agentDebug, 'http_response_sent', [
                                 'request_id' => (string) ($req['request_id'] ?? ''),
                                 'msg_num' => $msgNum,
-                                'status' => (int) ($handled['response']['status'] ?? 0),
+                                'status' => $respStatus,
                                 'response_wire_bytes' => strlen($outJson),
                             ]);
                             $v('http_response sent for request_id='.(string) ($req['request_id'] ?? ''));
+                            // Always-on traffic log line
+                            $stderr(self::formatTrafficLine($method, $path, $respStatus, strlen($outJson), $requestStartMs ?? null));
                             if (($handled['sample'] ?? null) !== null && getenv('JETTY_SHARE_CAPTURE_SAMPLES') !== '0') {
                                 $sample = $handled['sample'];
                                 self::agentEmit($agentDebug, 'bridge_sample_queued', [
@@ -1006,6 +1010,32 @@ final class EdgeAgent
     /**
      * @param  array<string, string>  $headers
      */
+    private static function formatTrafficLine(string $method, string $path, int $status, int $bytes, ?int $startMs): string
+    {
+        $method = str_pad($method, 4);
+        $pathDisplay = strlen($path) > 60 ? substr($path, 0, 57).'...' : $path;
+        $size = self::humanBytes($bytes);
+        $elapsed = '';
+        if ($startMs !== null) {
+            $ms = (int) round(microtime(true) * 1000) - $startMs;
+            $elapsed = $ms >= 1000 ? round($ms / 1000, 1).'s' : $ms.'ms';
+        }
+
+        return '  '.$method.' '.$pathDisplay.' '.$status.' '.$size.($elapsed !== '' ? ' '.$elapsed : '');
+    }
+
+    private static function humanBytes(int $bytes): string
+    {
+        if ($bytes < 1024) {
+            return $bytes.'B';
+        }
+        if ($bytes < 1048576) {
+            return round($bytes / 1024, 1).'kB';
+        }
+
+        return round($bytes / 1048576, 1).'MB';
+    }
+
     private static function headerValueCi(array $headers, string $name): ?string
     {
         foreach ($headers as $k => $v) {
