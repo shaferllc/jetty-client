@@ -2421,59 +2421,23 @@ TXT;
         }
     }
 
-    private static function shareNormalizeTunnelServer(?string $server): ?string
-    {
-        if ($server === null) {
-            return null;
-        }
-        $t = trim($server);
-
-        return $t === '' ? null : $t;
-    }
-
     /**
      * Pick an existing API tunnel row to reconnect when local target + edge server + optional subdomain match.
+     * Valet-style hostnames also resume across {@code :80} and {@code :443} for the same host.
      *
      * @param  list<array<string, mixed>>  $tunnels
      * @return array<string, mixed>|null
      */
     private function shareFindResumableTunnel(array $tunnels, string $localHost, int $port, ?string $subdomain, ?string $tunnelServer): ?array
     {
-        $target = $localHost.':'.$port;
-        $wantServer = self::shareNormalizeTunnelServer($tunnelServer);
-        $wantSub = $subdomain !== null ? trim($subdomain) : '';
-
-        $candidates = [];
-        foreach ($tunnels as $t) {
-            if (! is_array($t)) {
-                continue;
-            }
-            if ((string) ($t['local_target'] ?? '') !== $target) {
-                continue;
-            }
-            $gotServer = self::shareNormalizeTunnelServer(
-                isset($t['server']) && is_string($t['server']) ? $t['server'] : null
-            );
-            if ($gotServer !== $wantServer) {
-                continue;
-            }
-            if ($wantSub !== '' && trim((string) ($t['subdomain'] ?? '')) !== $wantSub) {
-                continue;
-            }
-            $candidates[] = $t;
-        }
-
-        if ($candidates === []) {
-            return null;
-        }
-
-        if ($wantSub !== '') {
-            return $candidates[0];
-        }
-
-        usort($candidates, fn ($a, $b): int => ((int) ($b['id'] ?? 0)) <=> ((int) ($a['id'] ?? 0)));
-
-        return $candidates[0];
+        return TunnelResumeMatcher::findResumableTunnel(
+            $tunnels,
+            $localHost,
+            $port,
+            $subdomain,
+            $tunnelServer,
+            self::shareUpstreamHostPrefersStandardWebPort($localHost),
+        );
     }
 
     /**

@@ -35,6 +35,16 @@ final class EdgeAgent
 
     private const MAX_AGENT_TOKEN_REFRESH_PER_RUN = 8;
 
+    /**
+     * Default seconds between WebSocket ping frames after the post-registration ping.
+     * Aggressive proxies sometimes idle-close around 10–15s; 25s was too sparse for those paths.
+     */
+    private const DEFAULT_WS_PING_INTERVAL_SECONDS = 8.0;
+
+    private const MIN_WS_PING_INTERVAL_SECONDS = 2.0;
+
+    private const MAX_WS_PING_INTERVAL_SECONDS = 120.0;
+
     /** Unix time of last forwarded HTTP request (for idle auto-close in {@see Application::runShareHeartbeatLoop}). */
     private static ?int $httpActivityUnix = null;
 
@@ -51,6 +61,31 @@ final class EdgeAgent
     public static function lastHttpActivityUnix(): ?int
     {
         return self::$httpActivityUnix;
+    }
+
+    /**
+     * Seconds to wait after each successful WebSocket ping before the next ping.
+     * Override with {@code JETTY_SHARE_WS_PING_INTERVAL} (2–120). Ignored when {@code JETTY_SHARE_NO_WS_PING=1}.
+     */
+    public static function websocketPingIntervalSeconds(): float
+    {
+        if (getenv('JETTY_SHARE_NO_WS_PING') === '1') {
+            return self::DEFAULT_WS_PING_INTERVAL_SECONDS;
+        }
+        $raw = getenv('JETTY_SHARE_WS_PING_INTERVAL');
+        if (! is_string($raw)) {
+            return self::DEFAULT_WS_PING_INTERVAL_SECONDS;
+        }
+        $raw = trim($raw);
+        if ($raw === '' || ! is_numeric($raw)) {
+            return self::DEFAULT_WS_PING_INTERVAL_SECONDS;
+        }
+        $v = (float) $raw;
+        if ($v < self::MIN_WS_PING_INTERVAL_SECONDS || $v > self::MAX_WS_PING_INTERVAL_SECONDS) {
+            return self::DEFAULT_WS_PING_INTERVAL_SECONDS;
+        }
+
+        return $v;
     }
 
     /**
@@ -365,7 +400,8 @@ final class EdgeAgent
                     }
                     $v('registration acknowledged; starting ws ping + receive loop');
 
-                    async(function () use ($conn, $state, $v, $verbose, $agentDebug): void {
+                    $pingEvery = self::websocketPingIntervalSeconds();
+                    async(function () use ($conn, $state, $v, $verbose, $agentDebug, $pingEvery): void {
                         while ($state->running) {
                             if (! $state->running) {
                                 break;
@@ -376,9 +412,8 @@ final class EdgeAgent
                                 continue;
                             }
                             try {
-                                // Ping as soon as we are registered, then every 25s. A long initial
-                                // delay meant proxies/nginx could idle-close the socket before the first
-                                // ping — connected UI but no HTTP forwarding (edge dropped the session).
+                                // Ping immediately after registration, then on a short interval so strict
+                                // proxies (often ~10–60s idle) do not close /agent before the next frame.
                                 $conn->ping();
                                 if ($verbose) {
                                     $v('websocket ping sent');
@@ -392,7 +427,7 @@ final class EdgeAgent
 
                                 break;
                             }
-                            delay(25.0);
+                            delay($pingEvery);
                         }
                     })->ignore();
 

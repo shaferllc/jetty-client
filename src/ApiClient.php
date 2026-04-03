@@ -37,7 +37,7 @@ final class ApiClient
         $res = $this->request('POST', '/api/tunnels', $payload);
 
         if ($res['status'] !== 201) {
-            throw new \RuntimeException('create tunnel: HTTP '.$res['status'].': '.$res['body']);
+            throw new \RuntimeException(self::formatTunnelMutationError('create tunnel', $res['status'], $res['body']));
         }
 
         $json = json_decode($res['body'], true, flags: JSON_THROW_ON_ERROR);
@@ -61,7 +61,7 @@ final class ApiClient
         $res = $this->request('POST', '/api/tunnels/'.$tunnelId.'/attach', $payload);
 
         if ($res['status'] !== 200) {
-            throw new \RuntimeException('attach tunnel: HTTP '.$res['status'].': '.$res['body']);
+            throw new \RuntimeException(self::formatTunnelMutationError('attach tunnel', $res['status'], $res['body']));
         }
 
         $json = json_decode($res['body'], true, flags: JSON_THROW_ON_ERROR);
@@ -165,6 +165,58 @@ final class ApiClient
         $json = json_decode($res['body'], true, flags: JSON_THROW_ON_ERROR);
 
         return is_array($json['data'] ?? null) ? $json['data'] : throw new \RuntimeException('Invalid API response');
+    }
+
+    /**
+     * Human-readable API failure for tunnel create/attach (parses JSON {@code message} / {@code hint}).
+     */
+    public static function formatTunnelMutationError(string $operation, int $httpStatus, string $body): string
+    {
+        $decoded = json_decode($body, true);
+        $msg = '';
+        $hint = '';
+        if (is_array($decoded)) {
+            if (isset($decoded['message']) && is_string($decoded['message'])) {
+                $msg = trim($decoded['message']);
+            }
+            if (isset($decoded['hint']) && is_string($decoded['hint'])) {
+                $hint = trim($decoded['hint']);
+            }
+        }
+        if ($msg === '') {
+            $trim = trim($body);
+            if (strlen($trim) > 400) {
+                $trim = substr($trim, 0, 400).'…';
+            }
+
+            return $operation.': HTTP '.$httpStatus.($trim !== '' ? ': '.$trim : '');
+        }
+        $out = $operation.': '.$msg;
+        if ($hint !== '') {
+            $out .= "\n\n".$hint;
+        } elseif ($httpStatus === 422 && self::bodyLooksLikeTunnelTeamLimit($msg)) {
+            $out .= "\n\n".self::tunnelTeamLimitCliHint();
+        }
+
+        return $out;
+    }
+
+    private static function bodyLooksLikeTunnelTeamLimit(string $message): bool
+    {
+        $m = strtolower($message);
+
+        return str_contains($m, 'tunnel limit')
+            || str_contains($m, 'remove a tunnel')
+            || str_contains($m, 'upgrade your plan');
+    }
+
+    private static function tunnelTeamLimitCliHint(): string
+    {
+        return "Your team already has the maximum number of tunnel rows Bridge allows.\n"
+            ."• List them: jetty list\n"
+            ."• Remove one you no longer need: jetty delete <id> (or delete in the Jetty app)\n"
+            ."• Same site, new TLS port: recent CLIs resume beacon.test:80 when you share beacon.test:443 (and vice versa) so you usually do not need a second row.\n"
+            ."Tunnels are not removed automatically when you exit `jetty share` — they stay registered until you delete them (or use JETTY_SHARE_DELETE_ON_EXIT=1).";
     }
 
     /**
