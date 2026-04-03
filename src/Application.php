@@ -1427,7 +1427,7 @@ final class Application
         putenv('JETTY_SHARE_CLI_UPSTREAM_HOSTNAME');
 
         $localHost = '127.0.0.1';
-        /** @var non-empty-string|null  Last non-IP --site/--host value for tunnel redirect rewriting */
+        /** @var non-empty-string|null Last non-IP --site/--host value for tunnel redirect rewriting */
         $shareCliHostnameForRewrite = null;
         $upstreamExplicit = false;
         $tunnelServerFlag = null;
@@ -1805,7 +1805,7 @@ final class Application
                 }
                 $msg .= "\n\nRunning multiple share processes for the same tunnel causes edge session conflicts —";
                 $msg .= "\nHTTP requests may fail with 'tunnel unavailable' even though a CLI appears connected.";
-                $msg .= "\n\nTo fix: kill the other process (`kill ".$lockStatus['pid']."`) or use --force to proceed anyway.";
+                $msg .= "\n\nTo fix: kill the other process (`kill ".$lockStatus['pid'].'`) or use --force to proceed anyway.';
                 throw new \RuntimeException($msg);
             }
             if ($lockStatus['stale']) {
@@ -1877,6 +1877,8 @@ final class Application
             $u->mutedLine('Try HTTP via edge:');
             $u->out('  '.$u->dim('curl -H ').$u->cyan('"Host: '.$curlHost.'"').$u->dim(' http://127.0.0.1:8090/'));
             $u->mutedLine('(Host matches what the edge forwards to your agent; adjust :8090 if needed.)');
+
+            $this->shareUpdateCheck();
 
             TelegramNotifier::shareStarted($telegramBase);
 
@@ -2390,6 +2392,70 @@ final class Application
                 'Invalid --server value "'.$label.'": use a tunnel id (letters/digits with optional . _ -), e.g. us-west-1.'
             );
         }
+    }
+
+    /**
+     * Show an update-available notice in the tunnel info block (if a newer version exists).
+     * Uses the same cached check as {@see maybePrintUpdateNotice} (at most one GitHub API call per 24h).
+     */
+    private function shareUpdateCheck(): void
+    {
+        if (getenv('JETTY_SKIP_UPDATE_NOTICE') === '1') {
+            return;
+        }
+
+        $pharPath = \Phar::running(false);
+        if ($pharPath !== '' && $this->localPharUpdateUrl() !== null) {
+            return;
+        }
+        if ($pharPath === '' && (! class_exists(InstalledVersions::class) || ! InstalledVersions::isInstalled('jetty/client'))) {
+            return;
+        }
+
+        $cachePath = $this->jettyUpdateNoticeCachePath();
+        if ($cachePath === '') {
+            return;
+        }
+
+        $now = time();
+        $cache = $this->readUpdateNoticeCache($cachePath);
+        $needRefresh = $cache === null || ($now - (int) ($cache['checked_at'] ?? 0)) >= 86400;
+
+        if ($needRefresh) {
+            try {
+                $repo = $this->releasesRepo();
+                $token = $this->githubTokenForReleases();
+                $latest = GitHubPharRelease::latest($repo, $token);
+                if ($latest === null) {
+                    return;
+                }
+                $remoteSemver = GitHubPharRelease::tagToSemver($latest['tag_name']);
+                $cmp = version_compare($remoteSemver, ApiClient::VERSION);
+                $cache = [
+                    'checked_at' => $now,
+                    'remote_tag' => $latest['tag_name'],
+                    'remote_semver' => $remoteSemver,
+                    'update_available' => $cmp > 0,
+                    'last_notice_at' => (int) ($cache['last_notice_at'] ?? 0),
+                    'last_notified_tag' => (string) ($cache['last_notified_tag'] ?? ''),
+                ];
+                $this->writeUpdateNoticeCache($cachePath, $cache);
+            } catch (\Throwable) {
+                return;
+            }
+        }
+
+        if (! ($cache['update_available'] ?? false)) {
+            return;
+        }
+
+        $tag = (string) ($cache['remote_tag'] ?? '');
+        if ($tag === '') {
+            return;
+        }
+
+        $u = $this->ui();
+        $u->warnLine('Update available: '.$tag.' (you have '.ApiClient::VERSION.') — run: '.$u->cmd('jetty update'));
     }
 
     /**
