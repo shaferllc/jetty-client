@@ -6,7 +6,7 @@ namespace JettyCli;
 
 final class ApiClient
 {
-    public const VERSION = '0.1.19';
+    public const VERSION = '0.1.60';
 
     /** Default GitHub owner/repo for PHAR `jetty update` / `self-update` when JETTY_*_REPO env is unset (matches Bridge config/jetty.php cli_github_repo). */
     public const DEFAULT_PHAR_RELEASES_REPO = 'shaferllc/jetty';
@@ -216,7 +216,7 @@ final class ApiClient
             ."• List them: jetty list\n"
             ."• Remove one you no longer need: jetty delete <id> (or delete in the Jetty app)\n"
             ."• Same site, new TLS port: recent CLIs resume beacon.test:80 when you share beacon.test:443 (and vice versa) so you usually do not need a second row.\n"
-            ."Tunnels are not removed automatically when you exit `jetty share` — they stay registered until you delete them (or use JETTY_SHARE_DELETE_ON_EXIT=1).";
+            .'Tunnels are not removed automatically when you exit `jetty share` — they stay registered until you delete them (or use JETTY_SHARE_DELETE_ON_EXIT=1).';
     }
 
     /**
