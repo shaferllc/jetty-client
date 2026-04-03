@@ -21,13 +21,15 @@ final class SetupWizard
     {
         $start = Config::resolve($configFlag);
         self::printSummary($start);
+        $ui = CliUi::default();
         while (true) {
-            self::out('');
-            self::out('What would you like to change?');
-            self::out('  1) Bridge & server — fetch the latest server list from Bridge and save the default for your region');
-            self::out('  2) API token only');
-            self::out('  3) Exit');
-            self::outRaw('Choice [1]: ');
+            $ui->out('');
+            $ui->section('Setup menu');
+            $ui->out('  '.$ui->bold($ui->cyan('1')).'  Bridge & server — refresh server list from Bridge');
+            $ui->out('  '.$ui->bold($ui->cyan('2')).'  API token only');
+            $ui->out('  '.$ui->bold($ui->cyan('3')).'  Exit');
+            $ui->out('');
+            $ui->outRaw($ui->dim('Choice [1]: '));
             $line = self::readLine();
             if ($line === false) {
                 return;
@@ -46,18 +48,20 @@ final class SetupWizard
             if ($line === '3') {
                 return;
             }
-            self::out('Please enter 1, 2, or 3.');
+            $ui->warnLine('Please enter 1, 2, or 3.');
         }
     }
 
     private static function printSummary(Config $start): void
     {
+        $ui = CliUi::default();
         $path = Config::userConfigPath() ?? '(could not resolve config path)';
-        self::out('Jetty config file: '.$path);
+        $ui->banner('Configuration');
+        $ui->out('  '.$ui->dim('Config file').'  '.$path);
         if ($start->apiUrl !== '') {
-            self::out('  Bridge API: '.$start->apiUrl);
+            $ui->out('  '.$ui->dim('Bridge API').'   '.$ui->cyan($start->apiUrl));
         }
-        self::out('  token: '.self::maskToken($start->token));
+        $ui->out('  '.$ui->dim('Token').'       '.self::maskToken($start->token));
     }
 
     private static function maskToken(string $t): string
@@ -541,12 +545,11 @@ final class SetupWizard
 
     private static function out(string $s): void
     {
-        fwrite(\STDOUT, $s.\PHP_EOL);
+        CliUi::default()->out($s);
     }
 
     private static function outRaw(string $s): void
     {
-        fwrite(\STDOUT, $s);
-        fflush(\STDOUT);
+        CliUi::default()->outRaw($s);
     }
 }

@@ -6,7 +6,7 @@ namespace JettyCli;
 
 final class ApiClient
 {
-    public const VERSION = '0.1.18';
+    public const VERSION = '0.1.19';
 
     /** Default GitHub owner/repo for PHAR `jetty update` / `self-update` when JETTY_*_REPO env is unset (matches Bridge config/jetty.php cli_github_repo). */
     public const DEFAULT_PHAR_RELEASES_REPO = 'shaferllc/jetty';
@@ -207,5 +207,46 @@ final class ApiClient
         $status = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
 
         return ['status' => $status, 'body' => (string) $responseBody];
+    }
+
+    /**
+     * Anonymous telemetry when the edge WebSocket handshake fails (e.g. nginx 502). Fire-and-forget; never throws.
+     * Opt out with JETTY_SHARE_TELEMETRY=0.
+     */
+    public function postEdgeWsFailureTelemetry(int $httpStatus, ?string $reason = null): void
+    {
+        if (getenv('JETTY_SHARE_TELEMETRY') === '0') {
+            return;
+        }
+        if ($httpStatus < 100 || $httpStatus > 599) {
+            return;
+        }
+
+        $url = rtrim($this->baseUrl, '/').'/api/telemetry/edge-ws-failure';
+        $body = json_encode(array_filter([
+            'http_status' => $httpStatus,
+            'reason' => $reason !== null && $reason !== '' ? substr($reason, 0, 200) : null,
+            'client' => 'jetty-php/'.self::VERSION,
+        ], static fn ($v) => $v !== null && $v !== ''), JSON_THROW_ON_ERROR);
+
+        $ch = curl_init($url);
+        if ($ch === false) {
+            return;
+        }
+
+        curl_setopt_array($ch, [
+            CURLOPT_POST => true,
+            CURLOPT_POSTFIELDS => $body,
+            CURLOPT_HTTPHEADER => [
+                'Content-Type: application/json',
+                'Accept: application/json',
+                'User-Agent: jetty-client/'.self::VERSION,
+            ],
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_TIMEOUT => 4,
+        ]);
+
+        curl_exec($ch);
+        curl_close($ch);
     }
 }

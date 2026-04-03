@@ -6,6 +6,7 @@ namespace JettyCli;
 
 use Amp\CancelledException;
 use Amp\DeferredCancellation;
+use Amp\Websocket\Client\WebsocketConnectException;
 use Amp\Websocket\Client\WebsocketConnection;
 use Revolt\EventLoop;
 use Revolt\EventLoop\UnsupportedFeatureException;
@@ -166,7 +167,8 @@ final class EdgeAgent
                     try {
                         $conn = connect($wsUrl);
                     } catch (\Throwable $e) {
-                        $stderr('edge WebSocket connect failed: '.$e->getMessage());
+                        $stderr('edge WebSocket connect failed: '.self::formatEdgeWsConnectErrorDetail($e));
+                        self::maybeReportWsFailureTelemetry($apiClient, $e);
                         $v('connect exception: '.$e::class.' '.$e->getMessage());
                         if ($state->userRequestedStop) {
                             $box->result = EdgeAgentResult::Finished;
@@ -549,5 +551,53 @@ final class EdgeAgent
         return in_array($k, [
             'connection', 'keep-alive', 'proxy-connection', 'transfer-encoding', 'upgrade', 'te', 'trailer',
         ], true);
+    }
+
+    private static function maybeReportWsFailureTelemetry(ApiClient $apiClient, \Throwable $e): void
+    {
+        if (! $e instanceof WebsocketConnectException) {
+            return;
+        }
+        try {
+            $status = $e->getResponse()->getStatus();
+            $apiClient->postEdgeWsFailureTelemetry($status, substr($e->getMessage(), 0, 200));
+        } catch (\Throwable) {
+            // never interrupt share / reconnect
+        }
+    }
+
+    /**
+     * Amphp's {@see WebsocketConnectException} carries the failed HTTP response. Surface status, reason phrase,
+     * and proxy-like headers so operators can tell a 502 from nginx/LB from TLS/DNS errors without guessing.
+     */
+    private static function formatEdgeWsConnectErrorDetail(\Throwable $e): string
+    {
+        $msg = $e->getMessage();
+        if (! $e instanceof WebsocketConnectException) {
+            return $msg;
+        }
+
+        $r = $e->getResponse();
+        $status = $r->getStatus();
+        $reasonPhrase = $r->getReason();
+
+        $headerParts = [];
+        foreach (['Server', 'Via', 'CF-Ray', 'X-Cache', 'X-Served-By', 'Date'] as $name) {
+            $v = $r->getHeader($name);
+            if ($v !== null && $v !== '') {
+                $headerParts[] = $name.': '.$v;
+            }
+        }
+
+        $lines = [$msg, '  HTTP '.$status.' '.$reasonPhrase];
+        if ($headerParts !== []) {
+            $lines[] = '  Headers: '.implode('; ', $headerParts);
+        }
+
+        if (in_array($status, [502, 503, 504], true)) {
+            $lines[] = '  Hint: '.$status.' on upgrade usually means the TLS proxy could not reach jetty-edge (check edge nginx/journalctl); Laravel verify runs only after 101 Switching Protocols.';
+        }
+
+        return implode("\n", $lines);
     }
 }

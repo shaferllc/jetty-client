@@ -8,6 +8,13 @@ use Composer\InstalledVersions;
 
 final class Application
 {
+    private ?CliUi $cliUi = null;
+
+    private function ui(): CliUi
+    {
+        return $this->cliUi ??= CliUi::forStdio();
+    }
+
     public function run(array $argv): int
     {
         array_shift($argv);
@@ -21,14 +28,15 @@ final class Application
                     try {
                         SetupWizard::runOnboarding($global['config'], $global['region'] ?? null);
                     } catch (\Throwable $e) {
-                        $this->stderr($e->getMessage());
+                        $this->ui()->errorLine($e->getMessage());
 
                         return 1;
                     }
 
                     return 0;
                 }
-                $this->stderr($this->helpText());
+                $this->printStyledMainHelp();
+                $this->ui()->mutedLine('Tip: run `jetty help` for the full command reference, or `jetty help --advanced` for env vars.');
 
                 return 1;
             }
@@ -59,7 +67,7 @@ final class Application
 
             return $code;
         } catch (\Throwable $e) {
-            $this->stderr($e->getMessage());
+            $this->ui()->errorLine($e->getMessage());
 
             return 1;
         }
@@ -181,7 +189,9 @@ final class Application
         $wantInstall = in_array('--install', $args, true);
         $checkUpdate = in_array('--check-update', $args, true);
 
-        $this->stdout('jetty '.ApiClient::VERSION);
+        $u = $this->ui();
+        $u->banner('v'.ApiClient::VERSION);
+        $u->out($u->bold('jetty/client').' '.$u->cyan(ApiClient::VERSION));
 
         if ($wantInstall) {
             $this->stdout('');
@@ -201,15 +211,15 @@ final class Application
                     $remoteSemver = GitHubPharRelease::tagToSemver($latest['tag_name']);
                     $cmp = version_compare($remoteSemver, ApiClient::VERSION);
                     if ($cmp > 0) {
-                        $this->stdout('Update available: '.$latest['tag_name'].' (you have '.ApiClient::VERSION.') — run: jetty update');
+                        $this->ui()->warnLine('Update available: '.$latest['tag_name'].' (you have '.ApiClient::VERSION.') — run: '.$this->ui()->cmd('jetty update'));
                     } else {
-                        $this->stdout('Up to date with latest release '.$latest['tag_name'].'.');
+                        $this->ui()->successLine('Up to date with latest release '.$latest['tag_name'].'.');
                     }
                 }
             } elseif (class_exists(InstalledVersions::class) && InstalledVersions::isInstalled('jetty/client')) {
                 return $this->updateComposerJettyClient(['--check']);
             } else {
-                $this->stderr('--check-update applies to PHAR installs (GitHub) or Composer installs (Packagist).');
+                $this->ui()->warnLine('--check-update applies to PHAR installs (GitHub) or Composer installs (Packagist).');
             }
         }
 
@@ -962,11 +972,15 @@ final class Application
         if ($unknown !== []) {
             throw new \InvalidArgumentException("Usage: jetty help [--advanced|-a]\n".$this->helpText());
         }
-        $this->stdout($this->helpText());
+        $this->printStyledMainHelp();
+        $this->ui()->out('');
+        $this->ui()->mutedLine('Share options: '.$this->ui()->cmd('jetty share --help'));
         if ($advanced) {
-            $this->stdout($this->helpTextAdvanced());
+            $this->ui()->out('');
+            $this->printAdvancedHelpStyled();
         } else {
-            $this->stdout("\nAdvanced (config file & environment variables): jetty help --advanced\n");
+            $this->ui()->out('');
+            $this->ui()->infoLine('Advanced (config & env): '.$this->ui()->cmd('jetty help --advanced'));
         }
 
         return 0;
@@ -995,27 +1009,69 @@ final class Application
         $client = $this->client($global);
         $tunnels = $client->listTunnels();
 
+        $u = $this->ui();
         if ($tunnels === []) {
-            $this->stdout('No tunnels.');
+            $u->mutedLine('No tunnels for this account yet.');
+            $u->infoLine('Create one with '.$u->cmd('jetty share'));
 
             return 0;
         }
 
+        $u->section('Your tunnels');
         foreach ($tunnels as $t) {
-            $id = $t['id'] ?? '';
-            $status = $t['status'] ?? '';
-            $public = $t['public_url'] ?? '';
-            $local = $t['local_target'] ?? '';
+            $id = (string) ($t['id'] ?? '');
+            $status = (string) ($t['status'] ?? '');
+            $public = (string) ($t['public_url'] ?? '');
+            $local = (string) ($t['local_target'] ?? '');
+            $st = $this->formatTunnelStatusLabel($status);
             if ($long) {
                 $note = isset($t['note']) && is_string($t['note']) && trim($t['note']) !== '' ? trim($t['note']) : '';
-                $suffix = $note !== '' ? '  note: '.$note : '';
-                $this->stdout("{$id}  {$status}  {$public}  {$local}{$suffix}");
+                $suffix = $note !== '' ? '  '.$u->dim('note: '.$note) : '';
+                $u->out($u->bold($id).'  '.$st.'  '.$u->cyan($public));
+                $u->mutedLine('    → '.$local.$suffix);
             } else {
-                $this->stdout("{$id}  {$status}  {$public}  {$local}");
+                $u->out($u->bold($id).'  '.$st.'  '.$u->cyan($public).'  '.$u->dim($local));
             }
         }
+        $u->out('');
 
         return 0;
+    }
+
+    private function formatTunnelStatusLabel(string $status): string
+    {
+        $u = $this->ui();
+        $s = strtolower(trim($status));
+        if ($s === '' || $s === 'unknown') {
+            return $u->dim($status !== '' ? $status : '—');
+        }
+        if (str_contains($s, 'active') || str_contains($s, 'run') || $s === 'up' || $s === 'online') {
+            return $u->green($status);
+        }
+        if (str_contains($s, 'idle') || str_contains($s, 'pause') || str_contains($s, 'sleep')) {
+            return $u->yellow($status);
+        }
+        if (str_contains($s, 'error') || str_contains($s, 'fail') || str_contains($s, 'down') || str_contains($s, 'off')) {
+            return $u->red($status);
+        }
+
+        return $u->dim($status);
+    }
+
+    private function printEdgeAgentStderr(string $m): void
+    {
+        $u = $this->ui();
+        if (str_starts_with($m, 'Edge agent connected') || str_starts_with($m, 'Edge agent reconnected')) {
+            $u->successLine($m);
+
+            return;
+        }
+        if (str_starts_with($m, 'edge: reconnecting')) {
+            $u->err($u->yellow($m));
+
+            return;
+        }
+        $u->err($m);
     }
 
     /**
@@ -1093,7 +1149,7 @@ final class Application
         }
 
         $this->stdout((string) $out);
-        $this->stderr('HTTP '.$code);
+        $this->ui()->mutedLine('HTTP '.$code);
 
         return 0;
     }
@@ -1130,20 +1186,22 @@ final class Application
             return 0;
         }
 
+        $u = $this->ui();
         if ($rows === []) {
-            $this->stdout('No reserved subdomains for this team. Add labels in the Jetty app (Domains) or run: jetty help');
+            $u->mutedLine('No reserved subdomains for this team.');
+            $u->infoLine('Add labels in the Jetty app (Domains).');
             if ($suffix !== '') {
-                $this->stdout('Tunnel host suffix: '.$suffix);
+                $u->out('  '.$u->dim('Suffix').'  '.$u->cyan('*.'.$suffix));
             }
 
             return 0;
         }
 
-        $this->stdout('Reserved labels (your team only):');
+        $u->section('Reserved subdomain labels');
         if ($suffix !== '') {
-            $this->stdout('Tunnel host suffix: '.$suffix);
+            $u->out('  '.$u->dim('Public URLs look like').'  '.$u->cyan('label.'.$suffix));
         }
-        $this->stdout('');
+        $u->out('');
         foreach ($rows as $row) {
             if (! is_array($row)) {
                 continue;
@@ -1151,13 +1209,13 @@ final class Application
             $slug = (string) ($row['slug'] ?? '');
             $hint = (string) ($row['full_host_hint'] ?? '');
             if ($hint !== '') {
-                $this->stdout($slug."\t".$hint);
+                $u->out('  '.$u->bold($u->green($slug)).'  '.$u->dim($hint));
             } else {
-                $this->stdout($slug);
+                $u->out('  '.$u->bold($u->green($slug)));
             }
         }
-        $this->stdout('');
-        $this->stdout('Use: jetty share --subdomain=LABEL (or set subdomain in jetty.config.json).');
+        $u->out('');
+        $u->infoLine('Use '.$u->cmd('jetty share --subdomain=LABEL').' or set subdomain in jetty.config.json');
 
         return 0;
     }
@@ -1605,7 +1663,7 @@ final class Application
         }
 
         if ($portHint !== null && ! $printUrlOnly) {
-            $this->stderr($portHint);
+            $this->ui()->infoLine($portHint);
         }
 
         $healthPathResolved = '/';
@@ -1708,18 +1766,25 @@ final class Application
                 return 0;
             }
 
-            $this->stderr('Public URL:  '.$publicUrl);
-            $this->stderr('Local:       '.$localTarget);
+            $u = $this->ui();
+            $u->section('Tunnel');
+            $pairs = [
+                ['Public URL', $u->cyan($publicUrl)],
+                ['Local', $localTarget],
+            ];
             if ($srvOut !== null) {
-                $this->stderr('Server:      '.$srvOut);
+                $pairs[] = ['Server', $srvOut];
             }
-            $this->stderr('Tunnel id:   '.$id);
+            $pairs[] = ['Tunnel id', (string) $id];
             if ($resumedTunnel) {
-                $this->stderr('Session:     resumed existing tunnel (same public URL; new edge credentials)');
+                $pairs[] = ['Session', $u->yellow('resumed (same URL; new edge credentials)')];
             }
-            $this->stderr('Status:      '.$status);
+            $pairs[] = ['Status', $this->formatTunnelStatusLabel($status)];
             if ($ws !== '') {
-                $this->stderr('Edge WS:     '.$ws);
+                $pairs[] = ['Edge WS', $u->dim($ws)];
+            }
+            foreach ($pairs as [$label, $value]) {
+                $u->out('  '.$u->dim(str_pad($label, 12)).' '.$value);
             }
 
             $curlHost = parse_url($publicUrl, PHP_URL_HOST);
@@ -1727,8 +1792,10 @@ final class Application
                 $suffix = $this->tunnelHostSuffixFromPublicUrl($publicUrl) ?? $this->tunnelHostSuffix();
                 $curlHost = $subdomain.'.'.$suffix;
             }
-            $this->stderr("\nTry HTTP via edge:\n  curl -H \"Host: {$curlHost}\" http://127.0.0.1:8090/");
-            $this->stderr("(same Host the edge forwards to your agent; adjust :8090 if ingress listens elsewhere)\n");
+            $u->out('');
+            $u->mutedLine('Try HTTP via edge:');
+            $u->out('  '.$u->dim('curl -H ').$u->cyan('"Host: '.$curlHost.'"').$u->dim(' http://127.0.0.1:8090/'));
+            $u->mutedLine('(Host matches what the edge forwards to your agent; adjust :8090 if needed.)');
 
             TelegramNotifier::shareStarted($telegramBase);
 
@@ -1738,7 +1805,7 @@ final class Application
                     $this->shareVerboseLog(true, 'initial heartbeat OK for tunnel id '.$id);
                 }
             } catch (\Throwable $e) {
-                $this->stderr('warning: initial heartbeat: '.$e->getMessage());
+                $this->ui()->warnLine('initial heartbeat: '.$e->getMessage());
                 if ($shareVerbose) {
                     $this->shareVerboseLog(true, 'initial heartbeat exception: '.$e->getMessage());
                 }
@@ -1757,25 +1824,25 @@ final class Application
                         $port,
                         $client,
                         $id,
-                        fn (string $m) => $this->stderr($m),
+                        fn (string $m) => $this->printEdgeAgentStderr($m),
                         $shareVerbose,
                         $shareRewriteOptions,
                         $curlHost,
                     );
                 } catch (\Throwable $e) {
                     $edgeFailDetail = $e->getMessage();
-                    $this->stderr('edge agent failed: '.$e->getMessage());
+                    $this->ui()->errorLine('edge agent failed: '.$e->getMessage());
                     if ($shareVerbose) {
-                        $this->stderr('[jetty:share] '.get_class($e).' in '.$e->getFile().':'.$e->getLine());
-                        $this->stderr('[jetty:share] '.$e->getTraceAsString());
+                        $this->ui()->verboseLine('[jetty:share] '.get_class($e).' in '.$e->getFile().':'.$e->getLine());
+                        $this->ui()->verboseLine('[jetty:share] '.$e->getTraceAsString());
                     }
-                    $this->stderr('Continuing with heartbeats only (no HTTP forwarding until you fix edge connectivity).');
+                    $this->ui()->warnLine('Continuing with heartbeats only (no HTTP forwarding until you fix edge connectivity).');
                     $edgeOutcome = EdgeAgentResult::FailedEarly;
                 }
             } elseif (! $printUrlOnly && ! $skipEdge && $ws === '') {
-                $this->stderr('Note: Bridge returned no edge WebSocket URL (JETTY_EDGE_WS_URL). Heartbeats only.');
+                $this->ui()->warnLine('Bridge returned no edge WebSocket URL (JETTY_EDGE_WS_URL). Heartbeats only.');
             } elseif (! $printUrlOnly && ! $skipEdge && $agentToken === '') {
-                $this->stderr('Note: no agent_token in API response — heartbeats only.');
+                $this->ui()->warnLine('No agent_token in API response — heartbeats only.');
             }
 
             $needsHeartbeatLoop = true;
@@ -1942,7 +2009,7 @@ final class Application
     private function shareVerboseLog(bool $verbose, string $message): void
     {
         if ($verbose) {
-            $this->stderr('[jetty:share] '.$message);
+            $this->ui()->verboseLine('[jetty:share] '.$message);
         }
     }
 
@@ -2415,6 +2482,71 @@ TXT;
         return 'tunnels.usejetty.online';
     }
 
+    /**
+     * Rich help for interactive terminals; plain text remains in {@see helpText()} for errors and pipes.
+     */
+    private function printStyledMainHelp(): void
+    {
+        $u = $this->ui();
+        $u->banner('PHP client · tunnels & sharing');
+        $u->section('Quick start');
+        $u->commandGrid([
+            ['jetty', 'First run: opens setup when no API token is saved'],
+            ['jetty onboard [--region=eu]', 'Sign in via browser; pick Bridge / server'],
+            ['jetty setup', 'Change Bridge, server, or token (interactive menu)'],
+        ]);
+        $u->out('');
+        $u->section('Tunnels');
+        $u->commandGrid([
+            ['jetty share [port]', 'Public HTTPS URL → your local app (alias: http)'],
+            ['jetty list [--long|-l]', 'List tunnels for your account'],
+            ['jetty delete <id>', 'Remove a tunnel'],
+            ['jetty replay <sample-id>', 'Replay a captured request locally'],
+            ['jetty domains [--json]', 'Reserved subdomain labels for your team'],
+        ]);
+        $u->out('');
+        $u->section('Configuration');
+        $u->commandGrid([
+            ['jetty config set|get|clear|wizard …', 'Persist settings (~/.config/jetty/config.json)'],
+            ['jetty logout', 'Clear saved token only'],
+            ['jetty reset', 'Clear all local Jetty CLI settings'],
+            ['jetty version [--install] [--check-update]', 'Show version and install kind'],
+            ['jetty update | jetty global-update', 'Update PHAR and/or Composer global package'],
+        ]);
+        $u->out('');
+        $u->section('Global flags');
+        $u->out('  '.$u->flag('--config=PATH').'   '.$u->dim('Alternate JSON config file'));
+        $u->out('  '.$u->flag('--api-url=URL').'   '.$u->dim('Override Bridge API base URL'));
+        $u->out('  '.$u->flag('--token=TOKEN').'   '.$u->dim('Override API token for this invocation'));
+        $u->out('  '.$u->flag('--region=CODE').'  '.$u->dim('Regional Bridge (e.g. eu → https://eu.usejetty.online)'));
+        $u->out('');
+        $u->mutedLine('Package: jetty/client  ·  Docs: jetty help --advanced');
+    }
+
+    private function printAdvancedHelpStyled(): void
+    {
+        $u = $this->ui();
+        $lines = explode("\n", $this->helpTextAdvanced());
+        foreach ($lines as $line) {
+            if ($line === '') {
+                $u->out('');
+
+                continue;
+            }
+            if (preg_match('/^──\s*(.+?)\s*──\s*$/u', $line, $m)) {
+                $u->section(trim($m[1]));
+
+                continue;
+            }
+            if (preg_match('/^(\s{2})(JETTY_[A-Z0-9_]+)(.*)$/', $line, $m)) {
+                $u->out($m[1].$u->envName($m[2]).$u->dim($m[3]));
+
+                continue;
+            }
+            $u->out($line);
+        }
+    }
+
     private function helpText(): string
     {
         return <<<'TXT'
@@ -2605,7 +2737,7 @@ TXT;
             return;
         }
 
-        $this->stderr('jetty: update available ('.$tag.') — run: jetty update');
+        $this->ui()->warnLine('jetty: update available ('.$tag.') — run: '.$this->ui()->cmd('jetty update'));
         $cache['last_notice_at'] = $now;
         $cache['last_notified_tag'] = $tag;
         $this->writeUpdateNoticeCache($cachePath, $cache);
