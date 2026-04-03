@@ -16,7 +16,7 @@ final class TunnelUpstreamRequestHeaders
 {
     /**
      * @param  array<string, string>  $edgeHeaders  Headers from the edge {@code http_request} frame
-     * @return array<string, string>  Headers to pass to curl toward {@code http://localHost:localPort}
+     * @return array<string, string> Headers to pass to curl toward {@code http://localHost:localPort}
      */
     public static function forLocalUpstream(array $edgeHeaders, string $localHost, int $localPort): array
     {
