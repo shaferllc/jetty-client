@@ -1061,13 +1061,23 @@ final class Application
     private function printEdgeAgentStderr(string $m): void
     {
         $u = $this->ui();
-        if (str_starts_with($m, 'Edge agent connected') || str_starts_with($m, 'Edge agent reconnected')) {
-            $u->successLine($m);
+        if (str_starts_with($m, 'Edge agent connected')) {
+            $u->successLine('Connected — forwarding HTTP to local upstream.');
+
+            return;
+        }
+        if (str_starts_with($m, 'Edge agent reconnected')) {
+            $u->successLine('Reconnected — forwarding HTTP to local upstream.');
 
             return;
         }
         if (str_starts_with($m, 'edge: reconnecting')) {
-            $u->err($u->yellow($m));
+            $u->err('  '.$u->yellow('↻ '.trim($m)));
+
+            return;
+        }
+        if (str_starts_with($m, 'edge: WebSocket dropped')) {
+            $u->err('  '.$u->dim($m));
 
             return;
         }
@@ -1844,39 +1854,34 @@ final class Application
             }
 
             $u = $this->ui();
-            $u->section('Tunnel');
-            $pairs = [
-                ['Public URL', $u->cyan($publicUrl)],
-                ['Local', $localTarget],
-            ];
-            if ($srvOut !== null) {
-                $pairs[] = ['Server', $srvOut];
-            }
-            $pairs[] = ['Tunnel id', (string) $id];
-            if ($resumedTunnel) {
-                $pairs[] = ['Session', $u->yellow('resumed (same URL; new edge credentials)')];
-            }
-            $pairs[] = ['Status', $this->formatTunnelStatusLabel($status)];
-            if ($ws !== '') {
-                $pairs[] = ['Edge WS', $u->dim($ws)];
-            }
-            $invocationCwd = getenv('JETTY_SHARE_INVOCATION_CWD');
-            if (is_string($invocationCwd) && $invocationCwd !== '') {
-                $pairs[] = ['Invoked from', $u->dim($invocationCwd)];
-            }
-            foreach ($pairs as [$label, $value]) {
-                $u->out('  '.$u->dim(str_pad($label, 12)).' '.$value);
-            }
 
             $curlHost = parse_url($publicUrl, PHP_URL_HOST);
             if (! is_string($curlHost) || $curlHost === '') {
                 $suffix = $this->tunnelHostSuffixFromPublicUrl($publicUrl) ?? $this->tunnelHostSuffix();
                 $curlHost = $subdomain.'.'.$suffix;
             }
+
+            // ── Public URL (hero line) ──
             $u->out('');
-            $u->mutedLine('Try HTTP via edge:');
-            $u->out('  '.$u->dim('curl -H ').$u->cyan('"Host: '.$curlHost.'"').$u->dim(' http://127.0.0.1:8090/'));
-            $u->mutedLine('(Host matches what the edge forwards to your agent; adjust :8090 if needed.)');
+            $u->out('  '.$u->bold($u->cyan($publicUrl)));
+            $u->out('');
+
+            // ── Tunnel details ──
+            $pairs = [
+                ['Forwarding', $u->dim($localTarget.' → ').$u->cyan($curlHost)],
+            ];
+            if ($srvOut !== null) {
+                $pairs[] = ['Server', $srvOut];
+            }
+            $pairs[] = ['Tunnel', $u->dim('#').(string) $id.($resumedTunnel ? '  '.$u->yellow('resumed') : '')];
+            $invocationCwd = getenv('JETTY_SHARE_INVOCATION_CWD');
+            if (is_string($invocationCwd) && $invocationCwd !== '') {
+                $pairs[] = ['Project', $u->dim($invocationCwd)];
+            }
+            foreach ($pairs as [$label, $value]) {
+                $u->out('  '.$u->dim(str_pad($label, 14)).$value);
+            }
+            $u->out('');
 
             $this->shareUpdateCheck();
 
@@ -1963,8 +1968,7 @@ final class Application
                 $this->stderr('');
             }
             if (! $printUrlOnly && ! $skipEdge && $ws !== '' && $agentToken !== '') {
-                $this->stderr('');
-                $this->stderr('Connecting edge agent to '.$ws.' …');
+                $this->stderr($this->ui()->dim('  Connecting…'));
                 try {
                     $edgeOutcome = EdgeAgent::run(
                         $ws,
@@ -2549,16 +2553,16 @@ TXT;
                 continue;
             }
             if ($p === 443 && self::shareUpstreamHostPrefersStandardWebPort($localHost)) {
-                return [$p, 'Local port: 443 (auto — TLS preferred for this hostname to avoid HTTP→HTTPS redirect loops through the tunnel; override with e.g. `jetty share 80 --site='.$localHost.'` if you need plain HTTP).'];
+                return [$p, 'Local upstream: '.$localHost.':443 (auto — TLS preferred to avoid redirect loops; override with e.g. `jetty share 80`).'];
             }
             if ($p === 80 && self::shareUpstreamHostPrefersStandardWebPort($localHost)) {
-                return [$p, 'Local port: 80 (auto — :443 not accepting connections; using HTTP. Secured Valet/Herd sites may redirect — use `https://` in APP_URL / `JETTY_SHARE_UPSTREAM` or ensure :443 is listening).'];
+                return [$p, 'Local upstream: '.$localHost.':80 (auto — :443 not available; Valet/Herd may redirect, ensure :443 is listening).'];
             }
 
-            return [$p, 'Local port: '.$p.' (auto — first responding port among common dev servers).'];
+            return [$p, 'Local upstream: '.$localHost.':'.$p.' (auto-detected).'];
         }
 
-        return [8000, 'Local port: 8000 (auto — no common dev port responded; pass a port if yours is different).'];
+        return [8000, 'Local upstream: '.$localHost.':8000 (auto — no dev port responded; pass a port if yours is different).'];
     }
 
     private function tcpPortAcceptsConnections(string $host, int $port, float $timeoutSeconds = 0.2): bool
