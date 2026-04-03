@@ -309,6 +309,112 @@ final class TunnelResponseRewriterTest extends TestCase
         }
     }
 
+    // --- detectViteDevServerUrls() ---
+
+    public function test_detect_vite_src_attribute_with_vite_client(): void
+    {
+        $html = '<html><head><script src="https://dply.test:5174/@vite/client"></script></head><body></body></html>';
+        $lookup = ['dply.test' => true];
+        $hits = TunnelResponseRewriter::detectViteDevServerUrls($html, $lookup, 443);
+
+        $this->assertNotEmpty($hits);
+        $this->assertSame(5174, $hits[0]['port']);
+        $this->assertTrue($hits[0]['vite_hint']);
+    }
+
+    public function test_detect_vite_no_ported_urls_returns_empty(): void
+    {
+        $html = '<html><head><link href="/style.css"></head><body><p>hello</p></body></html>';
+        $lookup = ['example.test' => true];
+        $hits = TunnelResponseRewriter::detectViteDevServerUrls($html, $lookup, 443);
+
+        $this->assertSame([], $hits);
+    }
+
+    public function test_detect_vite_ignores_standard_ports(): void
+    {
+        $html = '<html><body><script src="https://example.test:443/app.js"></script>'
+            .'<script src="https://example.test:80/other.js"></script></body></html>';
+        $lookup = ['example.test' => true];
+        $hits = TunnelResponseRewriter::detectViteDevServerUrls($html, $lookup, 443);
+
+        $this->assertSame([], $hits);
+    }
+
+    public function test_detect_vite_unknown_host_with_vite_marker_still_detected(): void
+    {
+        $html = '<html><body><script src="https://unknown.host:5173/@vite/client"></script></body></html>';
+        $lookup = ['myapp.test' => true];
+        $hits = TunnelResponseRewriter::detectViteDevServerUrls($html, $lookup, 443);
+
+        $this->assertNotEmpty($hits);
+        $this->assertTrue($hits[0]['vite_hint']);
+        $this->assertSame('unknown.host', $hits[0]['host']);
+    }
+
+    public function test_detect_vite_gzip_compressed_body(): void
+    {
+        $html = '<html><body><script src="https://app.test:5173/@vite/client"></script></body></html>';
+        $compressed = gzencode($html);
+        $lookup = ['app.test' => true];
+        $hits = TunnelResponseRewriter::detectViteDevServerUrls($compressed, $lookup, 443);
+
+        $this->assertNotEmpty($hits);
+        $this->assertSame(5173, $hits[0]['port']);
+        $this->assertTrue($hits[0]['vite_hint']);
+    }
+
+    public function test_detect_vite_multiple_ports_detected(): void
+    {
+        $html = '<html><body>'
+            .'<script src="https://app.test:5173/@vite/client"></script>'
+            .'<script src="https://app.test:5174/src/main.js"></script>'
+            .'</body></html>';
+        $lookup = ['app.test' => true];
+        $hits = TunnelResponseRewriter::detectViteDevServerUrls($html, $lookup, 443);
+
+        $ports = array_column($hits, 'port');
+        $this->assertContains(5173, $ports);
+        $this->assertContains(5174, $ports);
+    }
+
+    // --- injectViteDevServerBanner() ---
+
+    public function test_inject_vite_banner_before_body_close(): void
+    {
+        $html = '<html><body><p>Hello</p></body></html>';
+        $hits = [['url' => 'https://app.test:5173/@vite/client', 'host' => 'app.test', 'port' => 5173, 'vite_hint' => true]];
+        $out = TunnelResponseRewriter::injectViteDevServerBanner($html, $hits, 'app.test', 443);
+
+        $this->assertStringContainsString('jetty-vite-banner', $out);
+        $this->assertStringContainsString('</body>', $out);
+        // Banner should come before </body>
+        $bannerPos = strpos($out, 'jetty-vite-banner');
+        $bodyClosePos = strpos($out, '</body>');
+        $this->assertLessThan($bodyClosePos, $bannerPos);
+    }
+
+    public function test_inject_vite_banner_contains_port_and_fix(): void
+    {
+        $html = '<html><body></body></html>';
+        $hits = [['url' => 'https://app.test:5173/@vite/client', 'host' => 'app.test', 'port' => 5173, 'vite_hint' => true]];
+        $out = TunnelResponseRewriter::injectViteDevServerBanner($html, $hits, 'app.test', 8000);
+
+        $this->assertStringContainsString('5173', $out);
+        $this->assertStringContainsString('npm run build', $out);
+        $this->assertStringContainsString('app.test:8000', $out);
+    }
+
+    public function test_inject_vite_banner_appended_when_no_body_close(): void
+    {
+        $html = '<html><div>no body tag</div>';
+        $hits = [['url' => 'https://app.test:5173/@vite/client', 'host' => 'app.test', 'port' => 5173, 'vite_hint' => true]];
+        $out = TunnelResponseRewriter::injectViteDevServerBanner($html, $hits, 'app.test', 443);
+
+        $this->assertStringContainsString('jetty-vite-banner', $out);
+        $this->assertStringStartsWith('<html><div>no body tag</div>', $out);
+    }
+
     public function test_emit_debug_ndjson_appends_json_line_when_env_set(): void
     {
         $prev = getenv('JETTY_SHARE_DEBUG_NDJSON_FILE');

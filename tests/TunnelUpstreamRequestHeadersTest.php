@@ -61,4 +61,51 @@ final class TunnelUpstreamRequestHeadersTest extends TestCase
 
         $this->assertSame('http', $out['X-Forwarded-Proto']);
     }
+
+    public function test_strips_accept_encoding_header(): void
+    {
+        $out = TunnelUpstreamRequestHeaders::forLocalUpstream([
+            'Host' => 'lbl.tunnels.example.test',
+            'Accept' => 'text/html',
+            'Accept-Encoding' => 'gzip, deflate, br',
+        ], 'beacon.test', 80);
+
+        $this->assertArrayNotHasKey('Accept-Encoding', $out);
+        $this->assertSame('text/html', $out['Accept']);
+    }
+
+    public function test_strips_accept_encoding_case_insensitive(): void
+    {
+        $out = TunnelUpstreamRequestHeaders::forLocalUpstream([
+            'Host' => 'lbl.tunnels.example.test',
+            'accept-encoding' => 'gzip',
+        ], 'beacon.test', 80);
+
+        $this->assertArrayNotHasKey('accept-encoding', $out);
+        $this->assertArrayNotHasKey('Accept-Encoding', $out);
+
+        $out2 = TunnelUpstreamRequestHeaders::forLocalUpstream([
+            'Host' => 'lbl.tunnels.example.test',
+            'ACCEPT-ENCODING' => 'br',
+        ], 'beacon.test', 80);
+
+        $this->assertArrayNotHasKey('ACCEPT-ENCODING', $out2);
+        $this->assertArrayNotHasKey('Accept-Encoding', $out2);
+    }
+
+    public function test_other_headers_preserved_when_accept_encoding_stripped(): void
+    {
+        $out = TunnelUpstreamRequestHeaders::forLocalUpstream([
+            'Host' => 'lbl.tunnels.example.test',
+            'Accept' => 'text/html',
+            'Accept-Language' => 'en-US',
+            'Accept-Encoding' => 'gzip',
+            'User-Agent' => 'Mozilla/5.0',
+        ], 'beacon.test', 80);
+
+        $this->assertArrayNotHasKey('Accept-Encoding', $out);
+        $this->assertSame('text/html', $out['Accept']);
+        $this->assertSame('en-US', $out['Accept-Language']);
+        $this->assertSame('Mozilla/5.0', $out['User-Agent']);
+    }
 }
