@@ -1848,6 +1848,15 @@ final class Application
                         $shareRewriteOptions,
                         $curlHost,
                         $agentDebug,
+                        function () use ($client, $id, $localHost, $port, $tunnelServer): string {
+                            $data = $client->attachTunnel($id, $localHost, $port, $tunnelServer);
+                            $t = (string) ($data['agent_token'] ?? '');
+                            if ($t === '') {
+                                throw new \RuntimeException('attach response missing agent_token');
+                            }
+
+                            return $t;
+                        },
                     );
                 } catch (\Throwable $e) {
                     $edgeFailDetail = $e->getMessage();

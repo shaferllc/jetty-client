@@ -143,6 +143,8 @@ Opt out of header rewriting: **`JETTY_SHARE_NO_LOCATION_REWRITE=1`**.
 
 **Reconnect + resume:** By default the agent **retries the edge WebSocket** with backoff after a clean disconnect (disable with **`JETTY_SHARE_NO_EDGE_RECONNECT=1`**). **`jetty share`** can **resume** a tunnel you already own via **`GET /api/tunnels` + `POST …/attach`** unless **`JETTY_SHARE_NO_RESUME=1`**.
 
+**`verify rejected` on reconnect:** The edge checks your **`agent_token`** against Bridge (**`POST /api/edge/tunnel/verify`**). If another machine ran **`jetty share`** (or **`attach`**) on the same tunnel, the DB hash rotates and your in-memory token is stale — edge returns **`verify rejected: {"valid":false}`**. The CLI now **calls `POST /api/tunnels/{id}/attach` again** to fetch a fresh **`agent_token`**, then **retries** registration (up to **8** refreshes per run) instead of exiting to heartbeats-only immediately.
+
 **Request samples + replay:** The CLI can **`POST`** anonymized per-request metadata to Bridge after each proxied request (disable with **`JETTY_SHARE_CAPTURE_SAMPLES=0`**). In the app, open **Monitor** on a tunnel for the last N rows, path filter, **copy curl**, and a **signed read-only observer link**. **`jetty replay <id>`** repeats a stored request against your **local** upstream (**GET**/**HEAD** only unless **`JETTY_REPLAY_ALLOW_UNSAFE=1`**).
 
 Dynamic JS (concatenated URLs) may still escape; list every host your app emits in **`JETTY_SHARE_REWRITE_HOSTS`**. Optional app-side tweaks (e.g. Laravel **`URL::forceRootUrl`**, Rails **`default_url_options`**, Next **`assetPrefix`**) can complement the agent but are not required.

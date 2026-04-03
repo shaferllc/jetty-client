@@ -33,6 +33,8 @@ final class EdgeAgent
 
     private const TYPE_HTTP_RESPONSE = 'http_response';
 
+    private const MAX_AGENT_TOKEN_REFRESH_PER_RUN = 8;
+
     /** Unix time of last forwarded HTTP request (for idle auto-close in {@see Application::runShareHeartbeatLoop}). */
     private static ?int $httpActivityUnix = null;
 
@@ -58,6 +60,7 @@ final class EdgeAgent
      * @param  callable(string): void  $stderr  Always receives errors and important status lines
      * @param  string|null  $publicTunnelHostForRewrite  Host from Bridge public_url; used when edge frames omit Host so redirects/HTML can rewrite to the tunnel
      * @param  (callable(string, array<string, mixed>): void)|null  $agentDebug  Structured events (stderr JSON lines); enable with JETTY_SHARE_DEBUG_AGENT=1 or jetty share --debug-agent
+     * @param  (callable(): string)|null  $refreshAgentToken  When edge rejects registration (stale token), call Bridge attach and return new plaintext agent_token
      */
     public static function run(
         string $wsUrl,
@@ -72,6 +75,7 @@ final class EdgeAgent
         ?TunnelRewriteOptions $rewriteOptions = null,
         ?string $publicTunnelHostForRewrite = null,
         ?callable $agentDebug = null,
+        ?callable $refreshAgentToken = null,
     ): EdgeAgentResult {
         $v = function (string $m) use ($verbose, $stderr): void {
             if ($verbose) {
@@ -87,7 +91,7 @@ final class EdgeAgent
         $rewriteOpts = $rewriteOptions ?? TunnelRewriteOptions::fromEnvironment();
         $heartbeatAgentDebug = $agentDebug !== null && EdgeAgentDebug::heartbeatEventsFromEnvironment();
 
-        async(function () use ($wsUrl, $tunnelId, $agentToken, $localHost, $localPort, $apiClient, $heartbeatTunnelId, $stderr, $v, $verbose, $box, $rewriteOpts, $publicTunnelHostForRewrite, $agentDebug, $heartbeatAgentDebug): void {
+        async(function () use ($wsUrl, $tunnelId, &$agentToken, $localHost, $localPort, $apiClient, $heartbeatTunnelId, $stderr, $v, $verbose, $box, $rewriteOpts, $publicTunnelHostForRewrite, $agentDebug, $heartbeatAgentDebug, $refreshAgentToken): void {
             $state = new class
             {
                 public bool $running = true;
@@ -124,6 +128,7 @@ final class EdgeAgent
             }
 
             $edgeReconnect = getenv('JETTY_SHARE_NO_EDGE_RECONNECT') !== '1';
+            $agentTokenRefreshCount = 0;
 
             async(function () use ($state, $apiClient, $heartbeatTunnelId, $stderr, $v, $verbose, $agentDebug, $heartbeatAgentDebug): void {
                 $n = 0;
@@ -282,19 +287,44 @@ final class EdgeAgent
                     if ($type === self::TYPE_ERROR) {
                         /** @var array<string, mixed> $err */
                         $err = json_decode($rawFirst, true, 512, JSON_THROW_ON_ERROR);
+                        $errMsg = (string) ($err['message'] ?? $rawFirst);
                         self::agentEmit($agentDebug, 'edge_registration_error', [
                             'session' => $session,
-                            'message' => (string) ($err['message'] ?? ''),
+                            'message' => $errMsg,
                             'code' => $err['code'] ?? null,
                         ]);
-                        $stderr('edge error: '.(string) ($err['message'] ?? $rawFirst));
+                        $stderr('edge error: '.$errMsg);
                         if ($verbose) {
                             $stderr('[jetty:edge] error payload: '.$rawFirst);
                         }
                         $conn->close();
-                        $box->result = EdgeAgentResult::FailedEarly;
+                        $stale = self::registrationErrorLooksLikeStaleCredentials($errMsg);
+                        if ($stale && $refreshAgentToken !== null && $agentTokenRefreshCount < self::MAX_AGENT_TOKEN_REFRESH_PER_RUN) {
+                            try {
+                                $stderr('edge: refreshing agent_token via Bridge attach…');
+                                $agentToken = ($refreshAgentToken)();
+                                $agentTokenRefreshCount++;
+                                self::agentEmit($agentDebug, 'agent_token_refreshed', [
+                                    'session' => $session,
+                                    'refresh_count' => $agentTokenRefreshCount,
+                                    'new_token_len' => strlen($agentToken),
+                                ]);
+                            } catch (\Throwable $e) {
+                                $stderr('edge: could not refresh agent_token: '.$e->getMessage());
+                            }
+                        }
+                        if ($state->userRequestedStop) {
+                            $box->result = EdgeAgentResult::Finished;
 
-                        break;
+                            break;
+                        }
+                        if (! $edgeReconnect) {
+                            $box->result = EdgeAgentResult::FailedEarly;
+
+                            break;
+                        }
+
+                        continue;
                     }
                     if ($type !== self::TYPE_REGISTERED) {
                         self::agentEmit($agentDebug, 'edge_unexpected_first_frame', [
@@ -307,9 +337,18 @@ final class EdgeAgent
                             $stderr('[jetty:edge] full first message: '.$rawFirst);
                         }
                         $conn->close();
-                        $box->result = EdgeAgentResult::FailedEarly;
+                        if ($state->userRequestedStop) {
+                            $box->result = EdgeAgentResult::Finished;
 
-                        break;
+                            break;
+                        }
+                        if (! $edgeReconnect) {
+                            $box->result = EdgeAgentResult::FailedEarly;
+
+                            break;
+                        }
+
+                        continue;
                     }
 
                     $run->registeredOk = true;
@@ -504,6 +543,15 @@ final class EdgeAgent
         }
 
         return isset($probe['type']) ? (string) $probe['type'] : '';
+    }
+
+    private static function registrationErrorLooksLikeStaleCredentials(string $message): bool
+    {
+        $m = strtolower($message);
+
+        return str_contains($m, 'verify rejected')
+            || str_contains($m, 'invalid tunnel credentials')
+            || str_contains($m, 'laravel verify');
     }
 
     /**
