@@ -32,6 +32,11 @@ final class TunnelUpstreamRequestHeaders
             if (strcasecmp((string) $k, 'Host') === 0) {
                 continue;
             }
+            // Strip Accept-Encoding so the upstream always returns uncompressed responses.
+            // The body rewriter needs plain text; the edge can re-compress on the way out.
+            if (strcasecmp((string) $k, 'Accept-Encoding') === 0) {
+                continue;
+            }
             $out[$k] = $v;
         }
 

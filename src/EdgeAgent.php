@@ -822,6 +822,12 @@ final class EdgeAgent
         $respBody = substr($response, $headerSize);
 
         $parsedHeaders = self::parseResponseHeaders($headerBlock);
+        // Strip Content-Encoding — we asked the upstream for uncompressed (no Accept-Encoding)
+        // but some servers still send it. The edge can re-compress on the way out.
+        $parsedHeaders = self::removeHeaderCi($parsedHeaders, 'Content-Encoding');
+        // Strip Content-Length — body rewriting may change the size; the edge will set it
+        // from the actual response body. A stale Content-Length causes HTTP/2 stream errors.
+        $parsedHeaders = self::removeHeaderCi($parsedHeaders, 'Content-Length');
         $beforeRedirectRewrite = $parsedHeaders;
         $lookup = TunnelResponseRewriter::tunnelRewriteHostLookup($localHost);
         $rewriteRequestHeaders = TunnelResponseRewriter::requestHeadersWithRewriteTunnelHostFallback($headers, $publicTunnelHostForRewrite);
@@ -1009,6 +1015,21 @@ final class EdgeAgent
         }
 
         return null;
+    }
+
+    /**
+     * @param  array<string, string>  $headers
+     * @return array<string, string>
+     */
+    private static function removeHeaderCi(array $headers, string $name): array
+    {
+        foreach ($headers as $k => $v) {
+            if (strcasecmp((string) $k, $name) === 0) {
+                unset($headers[$k]);
+            }
+        }
+
+        return $headers;
     }
 
     /**

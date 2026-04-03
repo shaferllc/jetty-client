@@ -2175,13 +2175,17 @@ final class Application
             $tunnelLock = new TunnelLock($id);
             $lockStatus = $tunnelLock->check();
             if ($lockStatus['locked'] && ! $forceShare) {
-                $msg = 'Another `jetty share` process (PID '.$lockStatus['pid'].') is already connected to tunnel '.$id.'.';
-                if ($lockStatus['started'] !== null) {
-                    $msg .= ' Started: '.$lockStatus['started'].'.';
-                }
-                $msg .= "\n\nRunning multiple share processes for the same tunnel causes edge session conflicts —";
-                $msg .= "\nHTTP requests may fail with 'tunnel unavailable' even though a CLI appears connected.";
-                $msg .= "\n\nTo fix: kill the other process (`kill ".$lockStatus['pid'].'`) or use --force to proceed anyway.';
+                $u = $this->ui();
+                $u->out('');
+                $u->out('  '.$u->bold($u->cyan($publicUrl)));
+                $u->out('');
+                $u->out('  '.$u->dim(str_pad('Forwarding', 14)).$u->dim($localTarget.' → ').($publicUrl !== '' ? parse_url($publicUrl, PHP_URL_HOST) : ''));
+                $u->out('  '.$u->dim(str_pad('Tunnel', 14)).$u->dim('#').$id);
+                $u->out('  '.$u->dim(str_pad('PID', 14)).$lockStatus['pid'].($lockStatus['started'] !== null ? '  '.$u->dim('started '.$lockStatus['started']) : ''));
+                $u->out('');
+
+                $msg = 'Another `jetty share` process (PID '.$lockStatus['pid'].') is already connected to this tunnel.';
+                $msg .= "\n\nTo fix: kill it (`kill ".$lockStatus['pid'].'`) or use --force to proceed anyway.';
                 throw new \RuntimeException($msg);
             }
             if ($lockStatus['stale']) {
@@ -2189,11 +2193,19 @@ final class Application
             }
             $lockResult = $tunnelLock->acquire();
             if (! $lockResult['acquired']) {
+                $u = $this->ui();
+                $u->out('');
+                $u->out('  '.$u->bold($u->cyan($publicUrl)));
+                $u->out('');
+
+                $existingPid = $lockResult['existing_pid'] ?? null;
                 $msg = 'Another `jetty share` process is already connected to tunnel '.$id.'.';
-                if ($lockResult['existing_pid'] !== null) {
-                    $msg .= ' (PID '.$lockResult['existing_pid'].')';
+                if ($existingPid !== null) {
+                    $msg .= ' (PID '.$existingPid.')';
+                    $msg .= "\nTo fix: kill it (`kill ".$existingPid.'`) or use --force to proceed anyway.';
+                } else {
+                    $msg .= "\nUse --force to proceed anyway.";
                 }
-                $msg .= "\nUse --force to proceed anyway (not recommended — may cause edge conflicts).";
                 throw new \RuntimeException($msg);
             }
 
