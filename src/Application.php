@@ -1930,6 +1930,18 @@ final class Application
                     .'or `cd` into your Laravel app, set JETTY_SHARE_PROJECT_ROOT, or use --site=your-site.test.'
                 );
             }
+            $hotFile = TunnelResponseRewriter::detectViteHotFile();
+            if ($hotFile !== null) {
+                $hotContents = @file_get_contents($hotFile);
+                $hotUrl = is_string($hotContents) ? trim($hotContents) : '';
+                $this->ui()->warnLine(
+                    'Vite dev server detected (`public/hot` file exists'
+                    .($hotUrl !== '' ? ': '.$hotUrl : '')
+                    .'). Assets served by Vite (CSS, JS) run on a separate port that is NOT tunnelled — the page will likely appear blank or unstyled through the tunnel.'
+                );
+                $this->stderr('  To fix: stop `npm run dev`, run `npm run build`, then restart `jetty share`.');
+                $this->stderr('');
+            }
             if (! $printUrlOnly && ! $skipEdge && $ws !== '' && $agentToken !== '') {
                 $this->stderr('');
                 $this->stderr('Connecting edge agent to '.$ws.' …');

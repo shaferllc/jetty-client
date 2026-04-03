@@ -15,7 +15,7 @@ use DOMXPath;
 final class TunnelResponseRewriter
 {
     /** Bumps when tunnel rewrite / NDJSON diagnostics change (verify you are not on a stale PHAR). */
-    public const REWRITE_DEBUG_REV = 8;
+    public const REWRITE_DEBUG_REV = 9;
 
     /** @var list<string> */
     private const DATA_URL_ATTRS = ['data-url', 'data-href', 'data-src', 'data-action'];
@@ -919,6 +919,177 @@ final class TunnelResponseRewriter
             'location' => $location,
             'cli_upstream_hostname' => is_string($cli) && trim($cli) !== '' ? trim($cli) : null,
         ]));
+    }
+
+    /** @var bool Ensures the Vite dev-server warning is emitted at most once per process. */
+    private static bool $viteDevServerWarningEmitted = false;
+
+    /** Common Vite / dev-server ports that cannot be reached through the tunnel. */
+    private const VITE_DEV_SERVER_PORTS = [5173, 5174, 5175, 5176, 3000, 3001, 8080, 24678];
+
+    /**
+     * Scan a response body for URLs that look like they point at a Vite / HMR dev server running
+     * on a different port than the tunnelled upstream.  These assets cannot be loaded through the
+     * tunnel and will silently 404 (the page appears blank).
+     *
+     * Returns a list of detected URLs (empty when nothing suspicious was found).
+     *
+     * @param  array<string, true>  $rewriteHostsLookup
+     * @return list<array{url: string, host: string, port: int, vite_hint: bool}>
+     */
+    public static function detectViteDevServerUrls(string $body, array $rewriteHostsLookup, int $upstreamPort): array
+    {
+        // The body may be gzip-compressed (upstream echoes browser Accept-Encoding).
+        if (str_starts_with($body, "\x1f\x8b")) {
+            $decoded = @gzdecode($body);
+            if (is_string($decoded) && $decoded !== '') {
+                $body = $decoded;
+            }
+        }
+
+        $found = [];
+        $seen = [];
+
+        // Match src=/href= attributes and CSS url() pointing at http(s)://host:port
+        if (! preg_match_all(
+            '#(?:(?:src|href)\s*=\s*|url\s*\(\s*)["\']?(https?://([a-z0-9._-]+):(\d+)\b[^"\'>\s)]*)["\']?#i',
+            $body,
+            $matches,
+            PREG_SET_ORDER,
+        )) {
+            return [];
+        }
+
+        foreach ($matches as $m) {
+            $url = $m[1];
+            $host = strtolower($m[2]);
+            $port = (int) $m[3];
+
+            // Same port as the upstream — already tunnelled, no problem.
+            if ($port === $upstreamPort || $port === 443 || $port === 80) {
+                continue;
+            }
+
+            $viteHint = in_array($port, self::VITE_DEV_SERVER_PORTS, true)
+                || str_contains($url, '@vite/client')
+                || str_contains($url, '/@vite/')
+                || str_contains($url, '__vite_');
+
+            // Flag if host is in the lookup (rewritten but port dropped = broken)
+            // OR if the URL looks like a Vite/HMR dev server (unreachable regardless).
+            $hostInLookup = isset($rewriteHostsLookup[$host]);
+            if (! $hostInLookup && ! $viteHint) {
+                // Unknown host on a non-standard port — probably an external service, skip.
+                continue;
+            }
+
+            $key = $host.':'.$port;
+            if (isset($seen[$key])) {
+                continue;
+            }
+            $seen[$key] = true;
+
+            $found[] = [
+                'url' => self::truncateForLog($url, 200),
+                'host' => $host,
+                'port' => $port,
+                'vite_hint' => $viteHint,
+                'host_in_rewrite_lookup' => $hostInLookup,
+            ];
+        }
+
+        return $found;
+    }
+
+    /**
+     * Emit a clear warning (stderr + NDJSON) when Vite dev-server URLs are detected.
+     *
+     * @param  list<array{url: string, host: string, port: int, vite_hint: bool}>  $hits
+     */
+    public static function emitViteDevServerWarning(array $hits, string $requestId, string $localHost, int $localPort, string $tunnelHost): void
+    {
+        if ($hits === [] || self::$viteDevServerWarningEmitted) {
+            return;
+        }
+        self::$viteDevServerWarningEmitted = true;
+
+        $ports = array_unique(array_column($hits, 'port'));
+        $portList = implode(', ', $ports);
+        $isVite = (bool) array_filter(array_column($hits, 'vite_hint'));
+
+        $label = $isVite ? 'Vite dev server' : 'Dev server';
+        $lines = [];
+        $lines[] = '[jetty share] ⚠ '.$label.' detected on port(s) '.$portList.' — assets will NOT load through the tunnel.';
+        $lines[] = '  The tunnel forwards to '.$localHost.':'.$localPort.' only; '.$label.' on :'.$portList.' is not reachable from the public URL.';
+        $lines[] = '  The page may appear blank or unstyled because CSS/JS cannot be fetched.';
+        $lines[] = '';
+        if ($isVite) {
+            $lines[] = '  To fix: stop `npm run dev` and build assets instead:';
+            $lines[] = '    npm run build   (or: npx vite build)';
+            $lines[] = '  Then reload the tunnel URL.';
+        } else {
+            $lines[] = '  To fix: build assets for production so they are served by the app on :'.$localPort.'.';
+        }
+        $lines[] = '';
+        $lines[] = '  Detected URLs:';
+        foreach ($hits as $hit) {
+            $suffix = '';
+            if (isset($hit['host_in_rewrite_lookup']) && $hit['host_in_rewrite_lookup']) {
+                $suffix = '  (host rewritten but port '.$hit['port'].' dropped → will 404)';
+            }
+            $lines[] = '    • '.$hit['url'].$suffix;
+        }
+        $lines[] = '';
+
+        $msg = implode("\n", $lines)."\n";
+        if (\defined('STDERR') && \is_resource(STDERR)) {
+            @fwrite(STDERR, $msg);
+        } else {
+            error_log(rtrim($msg));
+        }
+
+        self::emitDebugNdjson('rewrite.vite_dev_server_detected', [
+            'request_id' => $requestId,
+            'local_host' => $localHost,
+            'local_port' => $localPort,
+            'tunnel_host' => $tunnelHost,
+            'label' => $label,
+            'dev_server_ports' => $ports,
+            'is_vite' => $isVite,
+            'hits' => $hits,
+            'fix' => $isVite
+                ? 'Stop `npm run dev` and run `npm run build`, then reload the tunnel URL.'
+                : 'Build assets for production so they are served by the app on :'.$localPort.'.',
+        ]);
+    }
+
+    /**
+     * Check whether a Laravel project has a Vite hot file (public/hot), indicating
+     * `npm run dev` is active and assets will point at the Vite dev server.
+     */
+    public static function detectViteHotFile(?string $projectDir = null): ?string
+    {
+        $dirs = [];
+        if ($projectDir !== null && $projectDir !== '') {
+            $dirs[] = $projectDir;
+        }
+        $inv = self::shareInvocationDirectoryForAppUrl();
+        if ($inv !== '') {
+            $dirs[] = $inv;
+        }
+        $projectRoot = getenv('JETTY_SHARE_PROJECT_ROOT');
+        if (is_string($projectRoot) && trim($projectRoot) !== '') {
+            $dirs[] = trim($projectRoot);
+        }
+
+        foreach ($dirs as $dir) {
+            $hotPath = rtrim($dir, '/').'/public/hot';
+            if (is_file($hotPath)) {
+                return $hotPath;
+            }
+        }
+
+        return null;
     }
 
     /**

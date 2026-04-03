@@ -849,6 +849,14 @@ final class EdgeAgent
         $bodyBeforeTunnelRewrite = $respBody;
         $respBody = TunnelResponseRewriter::maybeRewriteBody($respBody, $outHeaders, $rewriteRequestHeaders, $localHost, $rewriteOptions);
 
+        // Detect Vite / dev-server URLs that won't load through the tunnel.
+        $ct = self::headerValueCi($outHeaders, 'Content-Type') ?? '';
+        if (str_contains($ct, 'text/html')) {
+            $viteHits = TunnelResponseRewriter::detectViteDevServerUrls($bodyBeforeTunnelRewrite, $lookup, $localPort);
+            $effectiveTunnelHost = self::headerValueCi($rewriteRequestHeaders, 'Host') ?? $publicTunnelHostForRewrite;
+            TunnelResponseRewriter::emitViteDevServerWarning($viteHits, $requestId, $localHost, $localPort, $effectiveTunnelHost);
+        }
+
         $contentType = self::headerValueCi($outHeaders, 'Content-Type') ?? '';
         self::agentEmit($agentDebug, 'http_upstream_response', [
             'request_id' => $requestId,
