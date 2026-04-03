@@ -54,6 +54,7 @@ final class Application
                 'domains' => $this->cmdDomains($global, $rest),
                 'delete' => $this->cmdDelete($global, $rest),
                 'share', 'http' => $this->cmdShare($global, $rest),
+                'login' => $this->cmdLogin($global, $rest),
                 'onboard' => $this->cmdOnboard($global, $rest),
                 'setup' => $this->cmdSetup($global, $rest),
                 'logout' => $this->cmdLogout($rest),
@@ -458,12 +459,8 @@ final class Application
 
     private function localPharUpdateUrl(): ?string
     {
-        $u = getenv('JETTY_LOCAL_PHAR_URL');
-        if (! is_string($u)) {
-            return null;
-        }
-        $u = trim($u);
-        if ($u === '') {
+        $u = UpdateConfig::localPharUrl();
+        if ($u === null) {
             return null;
         }
         if (! str_starts_with($u, 'http://') && ! str_starts_with($u, 'https://')) {
@@ -782,7 +779,7 @@ final class Application
 
     private function unknownCommandUpgradeHint(string $command): string
     {
-        $newerOnly = ['setup', 'onboard', 'logout', 'reset', 'update'];
+        $newerOnly = ['setup', 'onboard', 'login', 'logout', 'reset', 'update'];
         if (! in_array($command, $newerOnly, true)) {
             return '';
         }
@@ -1018,7 +1015,7 @@ final class Application
         $client = $this->client($global);
         $data = $client->getRequestSample($id);
         $method = strtoupper((string) ($data['method'] ?? 'GET'));
-        $unsafe = getenv('JETTY_REPLAY_ALLOW_UNSAFE') === '1';
+        $unsafe = ReplayConfig::allowUnsafe();
         if ($method !== 'GET' && $method !== 'HEAD' && ! $unsafe) {
             $this->stderr('Replay only allows GET/HEAD by default. Set JETTY_REPLAY_ALLOW_UNSAFE=1 to replay other methods.');
 
@@ -1166,6 +1163,22 @@ final class Application
      * @param  array{api-url: ?string, token: ?string, config: ?string, region: ?string}  $global
      * @param  list<string>  $rest
      */
+    private function cmdLogin(array $global, array $rest): int
+    {
+        if ($rest !== []) {
+            throw new \InvalidArgumentException("Usage: jetty login\n".$this->helpText());
+        }
+        try {
+            SetupWizard::runLogin($global['config'], $global['region'] ?? null);
+        } catch (\Throwable $e) {
+            $this->stderr($e->getMessage());
+
+            return 1;
+        }
+
+        return 0;
+    }
+
     private function cmdOnboard(array $global, array $rest): int
     {
         if ($rest !== []) {
@@ -2489,12 +2502,10 @@ final class Application
      */
     private function runShareHeartbeatLoop(ApiClient $client, int $tunnelId, string $publicUrl, bool $verbose, bool $deleteOnExit, int $shareStartedAt): bool
     {
-        $idleDisabled = getenv('JETTY_SHARE_IDLE_DISABLE') === '1';
-        $promptAfter = (int) (getenv('JETTY_SHARE_IDLE_PROMPT_MINUTES') ?: '120');
-        if ($promptAfter <= 0) {
-            $idleDisabled = true;
-        }
-        $graceMin = max(1, (int) (getenv('JETTY_SHARE_IDLE_GRACE_MINUTES') ?: '60'));
+        $idleCfg = ShareIdleConfig::fromEnvironment();
+        $idleDisabled = $idleCfg->disabled;
+        $promptAfter = $idleCfg->promptMinutes;
+        $graceMin = $idleCfg->graceMinutes;
 
         if ($deleteOnExit) {
             $this->stderr("\nSending heartbeats every 25s. Ctrl+C to delete this tunnel and exit.\n");
@@ -2721,7 +2732,7 @@ final class Application
         $u = $this->ui();
         $current = ApiClient::VERSION;
 
-        if (getenv('JETTY_SKIP_UPDATE_NOTICE') === '1') {
+        if (UpdateConfig::isNoticeSkipped()) {
             $u->out('  '.$u->dim(str_pad('Version', 14)).'v'.$current);
 
             return false;
@@ -3082,6 +3093,7 @@ TXT;
         $u->section('Quick start');
         $u->commandGrid([
             ['jetty', 'First run: opens setup when no API token is saved'],
+            ['jetty login', 'Sign in via browser; choose team, subdomain, region'],
             ['jetty onboard [--region=eu]', 'Sign in via browser; pick Bridge / server'],
             ['jetty setup', 'Change Bridge, server, or token (interactive menu)'],
         ]);
@@ -3145,6 +3157,7 @@ Jetty PHP client (Composer package jetty/client) — tunnel API helper.
 
 Common commands:
   jetty                      First-run: runs setup when no token is configured (same as onboard)
+  jetty login                Sign in via browser; choose team, subdomain, and region defaults
   jetty onboard [--region=eu]   First-run: browser login; auto-picks server (default Bridge https://usejetty.online)
   jetty setup                Change settings (menu; same as jetty config wizard)
   jetty config set server|api-url|token|subdomain|domain|tunnel-server <value>
@@ -3166,6 +3179,7 @@ Commands:
     --check-update: PHAR→GitHub; Composer→Packagist (same as jetty update --check)
   jetty update [--check] [--force]   Update to the latest version (auto-detects PHAR or Composer)
   jetty install-client       composer require jetty/client in the current project (useful with a global jetty on PATH)
+  jetty login                Browser login with team/subdomain/region preferences
   jetty onboard              (see also: plain `jetty` when no token)
   jetty setup
   jetty help [--advanced|-a]   This help; --advanced lists config file & environment variables
@@ -3252,7 +3266,7 @@ TXT;
         if ($exitCode !== 0) {
             return;
         }
-        if (getenv('JETTY_SKIP_UPDATE_NOTICE') === '1') {
+        if (UpdateConfig::isNoticeSkipped()) {
             return;
         }
 

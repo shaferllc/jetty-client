@@ -137,6 +137,24 @@ final class EdgeAgent
     }
 
     /**
+     * Whether edge reconnect is enabled (default true).
+     * Disabled when {@code JETTY_SHARE_NO_EDGE_RECONNECT=1}.
+     */
+    public static function edgeReconnectEnabled(): bool
+    {
+        return getenv('JETTY_SHARE_NO_EDGE_RECONNECT') !== '1';
+    }
+
+    /**
+     * Whether request sample capture is enabled (default true).
+     * Disabled when {@code JETTY_SHARE_CAPTURE_SAMPLES=0}.
+     */
+    public static function captureSamplesEnabled(): bool
+    {
+        return getenv('JETTY_SHARE_CAPTURE_SAMPLES') !== '0';
+    }
+
+    /**
      * Blocks until the edge connection closes or the user stops (signal / cancellation).
      * Runs heartbeats concurrently (same interval as {@see Application} share loop).
      *
@@ -210,7 +228,7 @@ final class EdgeAgent
                 $stderr('edge: signal handlers unavailable: '.$e->getMessage());
             }
 
-            $edgeReconnect = getenv('JETTY_SHARE_NO_EDGE_RECONNECT') !== '1';
+            $edgeReconnect = self::edgeReconnectEnabled();
             $agentTokenRefreshCount = 0;
 
             async(function () use ($state, $apiClient, $heartbeatTunnelId, $stderr, $v, $verbose, $agentDebug, $heartbeatAgentDebug): void {
@@ -570,7 +588,7 @@ final class EdgeAgent
                             // Accumulate traffic for the next heartbeat
                             $reqBodyLen = strlen((string) ($req['body_b64'] ?? ''));
                             self::recordTraffic($reqBodyLen, strlen($outJson));
-                            if (($handled['sample'] ?? null) !== null && getenv('JETTY_SHARE_CAPTURE_SAMPLES') !== '0') {
+                            if (($handled['sample'] ?? null) !== null && self::captureSamplesEnabled()) {
                                 $sample = $handled['sample'];
                                 self::agentEmit($agentDebug, 'bridge_sample_queued', [
                                     'tunnel_id' => $heartbeatTunnelId,

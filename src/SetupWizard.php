@@ -12,6 +12,49 @@ namespace JettyCli;
  */
 final class SetupWizard
 {
+    /**
+     * `jetty login` — bootstrap Bridge discovery, then browser login with preferences.
+     */
+    public static function runLogin(?string $configFlag, ?string $region = null): void
+    {
+        $start = Config::resolve($configFlag, $region);
+        $candidates = self::bootstrapBridgeCandidates($start, $region);
+        if ($candidates === []) {
+            throw new \InvalidArgumentException(
+                'Cannot load servers: set JETTY_BRIDGE_URL or JETTY_ALLOW_LOCAL_BRIDGE=1 for a local Bridge.'
+            );
+        }
+        $boot = self::tryResolveBootstrapFromCandidates($candidates);
+        if ($boot !== null) {
+            self::pickServerFromBootstrapAndPersist($boot, $region);
+        }
+        $apiBase = rtrim(Config::resolve($configFlag, $region)->apiUrl, '/');
+        if ($apiBase === '') {
+            throw new \InvalidArgumentException('No Bridge URL configured. Run jetty onboard or set JETTY_BRIDGE_URL.');
+        }
+        $ui = CliUi::default();
+        $ui->out('Opening browser to sign in...');
+        $result = self::waitForBrowserLogin($apiBase);
+        $allowedConfigKeys = ['subdomain', 'tunnel_server'];
+        $patch = ['token' => $result['token']];
+        foreach ($result['config'] as $k => $v) {
+            if (in_array($k, $allowedConfigKeys, true) && is_string($v) && trim($v) !== '') {
+                $patch[$k] = trim($v);
+            }
+        }
+        Config::writeUserConfigMerged($patch);
+        $ui->out('');
+        $ui->section('Login complete');
+        $ui->out('  '.CliUi::default()->dim('Token').'       saved');
+        foreach ($result['config'] as $k => $v) {
+            if (is_string($v) && trim($v) !== '') {
+                $ui->out('  '.CliUi::default()->dim($k).'  '.$v);
+            }
+        }
+        $ui->out('');
+        $ui->out('Try: jetty share 8000');
+    }
+
     public static function runOnboarding(?string $configFlag, ?string $region = null): void
     {
         self::runBridgeAndServer(Config::resolve($configFlag, $region), true, $configFlag, $region);
@@ -400,6 +443,50 @@ final class SetupWizard
             $st = isset($poll['status']) && is_string($poll['status']) ? $poll['status'] : '';
             if ($st === 'success' && isset($poll['token']) && is_string($poll['token']) && $poll['token'] !== '') {
                 return $poll['token'];
+            }
+            if ($st === 'expired' || $st === 'invalid' || $st === 'rate_limited') {
+                throw new \RuntimeException('Browser login failed: '.$st);
+            }
+        }
+
+        throw new \RuntimeException('Timed out waiting for browser login (10 minutes)');
+    }
+
+    /**
+     * POST /api/cli/auth/session, open browser, poll until token + config preferences.
+     *
+     * @return array{token: string, config: array<string, string>}
+     */
+    private static function waitForBrowserLogin(string $apiBase): array
+    {
+        $sessionUrl = rtrim($apiBase, '/').'/api/cli/auth/session';
+        $raw = self::curlPostJson($sessionUrl, '{}');
+        /** @var array<string, mixed> $data */
+        $data = json_decode($raw, true, 512, JSON_THROW_ON_ERROR);
+        $pollUrl = isset($data['poll_url']) && is_string($data['poll_url']) ? $data['poll_url'] : '';
+        $authorizeUrl = isset($data['authorize_url']) && is_string($data['authorize_url']) ? $data['authorize_url'] : '';
+        if ($pollUrl === '' || $authorizeUrl === '') {
+            throw new \RuntimeException('Invalid auth session response from Bridge');
+        }
+        self::openBrowser($authorizeUrl);
+        $deadline = time() + 600;
+        while (time() < $deadline) {
+            usleep(1_500_000);
+            $pollRaw = self::curlGet($pollUrl);
+            /** @var array<string, mixed> $poll */
+            $poll = json_decode($pollRaw, true, 512, JSON_THROW_ON_ERROR);
+            $st = isset($poll['status']) && is_string($poll['status']) ? $poll['status'] : '';
+            if ($st === 'success' && isset($poll['token']) && is_string($poll['token']) && $poll['token'] !== '') {
+                $config = [];
+                if (isset($poll['config']) && is_array($poll['config'])) {
+                    foreach ($poll['config'] as $k => $v) {
+                        if (is_string($k) && is_string($v)) {
+                            $config[$k] = $v;
+                        }
+                    }
+                }
+
+                return ['token' => $poll['token'], 'config' => $config];
             }
             if ($st === 'expired' || $st === 'invalid' || $st === 'rate_limited') {
                 throw new \RuntimeException('Browser login failed: '.$st);

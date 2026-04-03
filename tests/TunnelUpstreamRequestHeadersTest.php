@@ -108,4 +108,56 @@ final class TunnelUpstreamRequestHeadersTest extends TestCase
         $this->assertSame('en-US', $out['Accept-Language']);
         $this->assertSame('Mozilla/5.0', $out['User-Agent']);
     }
+
+    public function test_strips_hop_by_hop_headers(): void
+    {
+        $hopByHop = [
+            'Connection' => 'keep-alive',
+            'Keep-Alive' => 'timeout=5',
+            'Proxy-Connection' => 'keep-alive',
+            'Transfer-Encoding' => 'chunked',
+            'Upgrade' => 'websocket',
+            'TE' => 'trailers',
+            'Trailer' => 'Expires',
+        ];
+        $out = TunnelUpstreamRequestHeaders::forLocalUpstream(
+            array_merge(['Host' => 'lbl.tunnels.example.test', 'Accept' => 'text/html'], $hopByHop),
+            'beacon.test',
+            80
+        );
+
+        foreach (array_keys($hopByHop) as $header) {
+            $this->assertArrayNotHasKey($header, $out, "Hop-by-hop header '$header' should be stripped");
+        }
+        $this->assertSame('text/html', $out['Accept']);
+    }
+
+    public function test_x_forwarded_proto_set_to_https_when_absent(): void
+    {
+        $out = TunnelUpstreamRequestHeaders::forLocalUpstream([
+            'Host' => 'lbl.tunnels.example.test',
+        ], 'beacon.test', 80);
+
+        $this->assertArrayHasKey('X-Forwarded-Proto', $out);
+        $this->assertSame('https', $out['X-Forwarded-Proto']);
+    }
+
+    public function test_x_forwarded_host_set_when_host_differs_from_upstream(): void
+    {
+        $out = TunnelUpstreamRequestHeaders::forLocalUpstream([
+            'Host' => 'lbl.tunnels.example.test',
+        ], 'beacon.test', 8000);
+
+        $this->assertSame('lbl.tunnels.example.test', $out['X-Forwarded-Host']);
+        $this->assertSame('beacon.test:8000', $out['Host']);
+    }
+
+    public function test_x_forwarded_host_not_set_when_host_matches_upstream(): void
+    {
+        $out = TunnelUpstreamRequestHeaders::forLocalUpstream([
+            'Host' => 'beacon.test',
+        ], 'beacon.test', 80);
+
+        $this->assertArrayNotHasKey('X-Forwarded-Host', $out);
+    }
 }

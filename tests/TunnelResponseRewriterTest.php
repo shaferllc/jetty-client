@@ -415,6 +415,166 @@ final class TunnelResponseRewriterTest extends TestCase
         $this->assertStringStartsWith('<html><div>no body tag</div>', $out);
     }
 
+    public function test_no_location_rewrite_env_skips_location_rewrite(): void
+    {
+        $prev = getenv('JETTY_SHARE_NO_LOCATION_REWRITE');
+        putenv('JETTY_SHARE_NO_LOCATION_REWRITE=1');
+        try {
+            $lookup = ['127.0.0.1' => true];
+            $req = ['Host' => 't.tunnels.x'];
+            $res = TunnelResponseRewriter::rewriteRedirectHeaders([
+                'Location' => 'https://127.0.0.1:8000/dashboard',
+            ], $req, $lookup, '127.0.0.1');
+            // Location should NOT be rewritten when env is set
+            $this->assertSame('https://127.0.0.1:8000/dashboard', $res['Location']);
+        } finally {
+            if ($prev === false) {
+                putenv('JETTY_SHARE_NO_LOCATION_REWRITE');
+            } else {
+                putenv('JETTY_SHARE_NO_LOCATION_REWRITE='.$prev);
+            }
+        }
+    }
+
+    public function test_no_location_rewrite_env_unset_rewrites_location(): void
+    {
+        $prev = getenv('JETTY_SHARE_NO_LOCATION_REWRITE');
+        putenv('JETTY_SHARE_NO_LOCATION_REWRITE');
+        try {
+            $lookup = ['127.0.0.1' => true];
+            $req = ['Host' => 't.tunnels.x'];
+            $res = TunnelResponseRewriter::rewriteRedirectHeaders([
+                'Location' => 'https://127.0.0.1:8000/dashboard',
+            ], $req, $lookup, '127.0.0.1');
+            // Location SHOULD be rewritten when env is unset
+            $this->assertSame('https://t.tunnels.x/dashboard', $res['Location']);
+        } finally {
+            if ($prev === false) {
+                putenv('JETTY_SHARE_NO_LOCATION_REWRITE');
+            } else {
+                putenv('JETTY_SHARE_NO_LOCATION_REWRITE='.$prev);
+            }
+        }
+    }
+
+    public function test_no_adjacent_laravel_scan_env_suppresses_walk_up_hosts(): void
+    {
+        $prevScan = getenv('JETTY_SHARE_NO_ADJACENT_LARAVEL_SCAN');
+        $prevInv = getenv('JETTY_SHARE_INVOCATION_CWD');
+
+        $base = sys_get_temp_dir().'/jetty-noscan-'.uniqid('', true);
+        mkdir($base.'/peer-app', 0700, true);
+        file_put_contents($base.'/peer-app/artisan', "<?php\n");
+        file_put_contents($base.'/peer-app/.env', "APP_URL=https://fixture-noscan-peer.test\n");
+        mkdir($base.'/child', 0700, true);
+
+        putenv('JETTY_SHARE_INVOCATION_CWD='.$base.'/child');
+        try {
+            // Without the env var, adjacent scan should find the peer
+            putenv('JETTY_SHARE_NO_ADJACENT_LARAVEL_SCAN');
+            TunnelResponseRewriter::resetWalkUpAdjacentAppUrlCacheForTesting();
+            $lookupWith = TunnelResponseRewriter::tunnelRewriteHostLookup('127.0.0.1');
+
+            // With the env var set, adjacent scan should be suppressed
+            putenv('JETTY_SHARE_NO_ADJACENT_LARAVEL_SCAN=1');
+            TunnelResponseRewriter::resetWalkUpAdjacentAppUrlCacheForTesting();
+            $lookupWithout = TunnelResponseRewriter::tunnelRewriteHostLookup('127.0.0.1');
+
+            $this->assertArrayHasKey('fixture-noscan-peer.test', $lookupWith);
+            $this->assertArrayNotHasKey('fixture-noscan-peer.test', $lookupWithout);
+        } finally {
+            if ($prevScan === false) {
+                putenv('JETTY_SHARE_NO_ADJACENT_LARAVEL_SCAN');
+            } else {
+                putenv('JETTY_SHARE_NO_ADJACENT_LARAVEL_SCAN='.$prevScan);
+            }
+            if ($prevInv === false) {
+                putenv('JETTY_SHARE_INVOCATION_CWD');
+            } else {
+                putenv('JETTY_SHARE_INVOCATION_CWD='.$prevInv);
+            }
+            unlink($base.'/peer-app/.env');
+            unlink($base.'/peer-app/artisan');
+            rmdir($base.'/peer-app');
+            rmdir($base.'/child');
+            rmdir($base);
+        }
+    }
+
+    public function test_debug_rewrite_enabled_returns_true_when_env_set(): void
+    {
+        $key = 'JETTY_SHARE_DEBUG_REWRITE';
+        $prev = getenv($key);
+        putenv($key.'=1');
+        try {
+            $m = new \ReflectionMethod(TunnelResponseRewriter::class, 'debugRewriteEnabled');
+            $this->assertTrue($m->invoke(null));
+        } finally {
+            if ($prev === false) {
+                putenv($key);
+            } else {
+                putenv($key.'='.$prev);
+            }
+        }
+    }
+
+    public function test_debug_rewrite_enabled_returns_false_when_unset(): void
+    {
+        $key = 'JETTY_SHARE_DEBUG_REWRITE';
+        $prev = getenv($key);
+        $prevServer = $_SERVER[$key] ?? null;
+        $prevEnv = $_ENV[$key] ?? null;
+        putenv($key);
+        unset($_SERVER[$key], $_ENV[$key]);
+        try {
+            $m = new \ReflectionMethod(TunnelResponseRewriter::class, 'debugRewriteEnabled');
+            $this->assertFalse($m->invoke(null));
+        } finally {
+            if ($prevServer !== null) {
+                $_SERVER[$key] = $prevServer;
+            }
+            if ($prevEnv !== null) {
+                $_ENV[$key] = $prevEnv;
+            }
+            if ($prev === false) {
+                putenv($key);
+            } else {
+                putenv($key.'='.$prev);
+            }
+        }
+    }
+
+    public function test_maybe_rewrite_body_skips_when_body_exceeds_max_bytes(): void
+    {
+        $opts = new TunnelRewriteOptions(true, true, true, maxBodyBytes: 50);
+        $html = '<html><body><a href="https://127.0.0.1:8000/page">x</a></body></html>';
+        // Body is longer than 50 bytes, so it should be returned unchanged
+        $this->assertGreaterThan(50, strlen($html));
+        $out = TunnelResponseRewriter::maybeRewriteBody(
+            $html,
+            ['Content-Type' => 'text/html'],
+            ['Host' => 'lbl.tunnels.usejetty.online'],
+            '127.0.0.1',
+            $opts
+        );
+        $this->assertSame($html, $out);
+    }
+
+    public function test_maybe_rewrite_body_rewrites_when_within_max_bytes(): void
+    {
+        $html = '<html><body><a href="https://127.0.0.1:8000/page">x</a></body></html>';
+        $opts = new TunnelRewriteOptions(true, true, true, maxBodyBytes: 10000);
+        $this->assertLessThan(10000, strlen($html));
+        $out = TunnelResponseRewriter::maybeRewriteBody(
+            $html,
+            ['Content-Type' => 'text/html'],
+            ['Host' => 'lbl.tunnels.usejetty.online'],
+            '127.0.0.1',
+            $opts
+        );
+        $this->assertStringContainsString('href="https://lbl.tunnels.usejetty.online/page"', $out);
+    }
+
     public function test_emit_debug_ndjson_appends_json_line_when_env_set(): void
     {
         $prev = getenv('JETTY_SHARE_DEBUG_NDJSON_FILE');
