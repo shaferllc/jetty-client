@@ -74,7 +74,13 @@ On the **Jetty Bridge** (this app’s Laravel API), the same env vars apply; set
 
 ### Tunnel redirects (Laravel / `APP_URL`)
 
-If your local app redirects to its canonical host (e.g. **`https://beacon.test`** from **`APP_URL`**), the edge agent rewrites **`Location`** (and **`X-Inertia-Location`**) when the redirect target’s host matches the **upstream** you’re sharing (e.g. **`beacon.test`**) so the browser stays on **`https://{label}.tunnels…`**. Disable with **`JETTY_SHARE_NO_LOCATION_REWRITE=1`** if you need the original redirect.
+If your local app redirects to its canonical host (e.g. **`https://beacon.test`** from **`APP_URL`**), the edge agent rewrites **`Location`** (and **`X-Inertia-Location`**) when the redirect target’s host is one of:
+
+- The **upstream** host you’re sharing (e.g. **`127.0.0.1`** or **`beacon.test`**),
+- **`APP_URL`** read from **`.env`** (walks up from the current working directory) or from the **`APP_URL`** environment variable,
+- Extra hosts from **`JETTY_SHARE_REWRITE_HOSTS`** (comma-separated), e.g. **`beacon.test,www.beacon.test`**.
+
+That way the browser stays on **`https://{label}.tunnels…`** even when Laravel forces **`APP_URL`**. Disable with **`JETTY_SHARE_NO_LOCATION_REWRITE=1`** if you need the original redirect.
 
 ## Split repository
 

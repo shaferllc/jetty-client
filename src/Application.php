@@ -1356,9 +1356,13 @@ final class Application
                 $this->stderr('Edge WS:     '.$ws);
             }
 
-            $suffix = $this->tunnelHostSuffixFromPublicUrl($publicUrl) ?? $this->tunnelHostSuffix();
-            $this->stderr("\nTry HTTP via edge:\n  curl -H \"Host: {$subdomain}.{$suffix}\" http://127.0.0.1:8090/");
-            $this->stderr("(adjust :8090 if your ingress listens elsewhere)\n");
+            $curlHost = parse_url($publicUrl, PHP_URL_HOST);
+            if (! is_string($curlHost) || $curlHost === '') {
+                $suffix = $this->tunnelHostSuffixFromPublicUrl($publicUrl) ?? $this->tunnelHostSuffix();
+                $curlHost = $subdomain.'.'.$suffix;
+            }
+            $this->stderr("\nTry HTTP via edge:\n  curl -H \"Host: {$curlHost}\" http://127.0.0.1:8090/");
+            $this->stderr("(same Host the edge forwards to your agent; adjust :8090 if ingress listens elsewhere)\n");
 
             TelegramNotifier::shareStarted($telegramBase);
 

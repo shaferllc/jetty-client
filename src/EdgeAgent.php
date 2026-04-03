@@ -312,7 +312,7 @@ final class EdgeAgent
         $respBody = substr($response, $headerSize);
 
         $outHeaders = self::parseResponseHeaders($headerBlock);
-        $outHeaders = self::rewriteTunnelRedirectHeaders($outHeaders, $headers, $localHost);
+        $outHeaders = self::rewriteTunnelRedirectHeaders($outHeaders, $headers, self::tunnelRewriteHostLookup($localHost));
 
         return [
             'type' => self::TYPE_HTTP_RESPONSE,
@@ -324,15 +324,17 @@ final class EdgeAgent
     }
 
     /**
-     * When the local app (e.g. Laravel with APP_URL=https://beacon.test) returns redirects to the
-     * upstream hostname, rewrite Location (and Inertia) to the public tunnel host so the browser
-     * stays on https://{label}.tunnels.example.com. Opt out: JETTY_SHARE_NO_LOCATION_REWRITE=1.
+     * When the local app (e.g. Laravel) returns redirects to a canonical host (upstream host,
+     * APP_URL from .env or the environment, or JETTY_SHARE_REWRITE_HOSTS), rewrite Location
+     * (and Inertia) to the public tunnel host so the browser stays on https://{label}.tunnels… .
+     * Opt out: JETTY_SHARE_NO_LOCATION_REWRITE=1.
      *
      * @param  array<string, string>  $responseHeaders
      * @param  array<string, string>  $requestHeaders  Original browser request headers (includes Host)
+     * @param  array<string, true>  $rewriteHostsLookup  Hosts whose redirects should be rewritten to the tunnel
      * @return array<string, string>
      */
-    private static function rewriteTunnelRedirectHeaders(array $responseHeaders, array $requestHeaders, string $localHost): array
+    private static function rewriteTunnelRedirectHeaders(array $responseHeaders, array $requestHeaders, array $rewriteHostsLookup): array
     {
         if (getenv('JETTY_SHARE_NO_LOCATION_REWRITE') === '1') {
             return $responseHeaders;
@@ -349,14 +351,12 @@ final class EdgeAgent
             return $responseHeaders;
         }
 
-        $upstream = strtolower(trim($localHost));
-
         foreach (['Location', 'X-Inertia-Location'] as $headerName) {
             foreach ($responseHeaders as $name => $value) {
                 if (strcasecmp($name, $headerName) !== 0) {
                     continue;
                 }
-                $rewritten = self::rewriteAbsoluteRedirectToTunnelHost((string) $value, $upstream, $publicHost);
+                $rewritten = self::rewriteAbsoluteRedirectToTunnelHost((string) $value, $rewriteHostsLookup, $publicHost);
                 if ($rewritten !== null) {
                     $responseHeaders[$name] = $rewritten;
                 }
@@ -367,9 +367,48 @@ final class EdgeAgent
     }
 
     /**
-     * If the URL is absolute and points at the local upstream host, rewrite scheme/host to the tunnel.
+     * Hosts that should have absolute redirects rewritten to the tunnel: upstream host, APP_URL from .env / env,
+     * optional JETTY_SHARE_REWRITE_HOSTS (comma-separated).
+     *
+     * @return array<string, true>
      */
-    private static function rewriteAbsoluteRedirectToTunnelHost(string $value, string $upstreamHostLower, string $tunnelHostLower): ?string
+    private static function tunnelRewriteHostLookup(string $localHost): array
+    {
+        $lookup = [];
+        $add = function (string $h) use (&$lookup): void {
+            $h = strtolower(trim($h));
+            if ($h === '') {
+                return;
+            }
+            $lookup[$h] = true;
+            if (! str_starts_with($h, 'www.')) {
+                $lookup['www.'.$h] = true;
+            }
+        };
+        $add($localHost);
+        $extra = getenv('JETTY_SHARE_REWRITE_HOSTS');
+        if (is_string($extra) && $extra !== '') {
+            foreach (explode(',', $extra) as $part) {
+                $add(trim($part));
+            }
+        }
+        foreach (LocalDevDetector::appUrlHostsForTunnelRewrite() as $h) {
+            $add($h);
+        }
+        $appUrlEnv = getenv('APP_URL');
+        if (is_string($appUrlEnv) && $appUrlEnv !== '') {
+            foreach (LocalDevDetector::hostsFromAppUrlRaw($appUrlEnv) as $h) {
+                $add($h);
+            }
+        }
+
+        return $lookup;
+    }
+
+    /**
+     * If the URL is absolute and points at a known local/canonical host, rewrite scheme/host to the tunnel.
+     */
+    private static function rewriteAbsoluteRedirectToTunnelHost(string $value, array $rewriteHostsLookup, string $tunnelHostLower): ?string
     {
         $value = trim($value);
         if ($value === '' || $value[0] === '/') {
@@ -381,7 +420,7 @@ final class EdgeAgent
             return null;
         }
 
-        if (strtolower((string) $parts['host']) !== $upstreamHostLower) {
+        if (! isset($rewriteHostsLookup[strtolower((string) $parts['host'])])) {
             return null;
         }
 

@@ -923,6 +923,64 @@ final class LocalDevDetector
             || str_ends_with($h, '.wip');
     }
 
+    /**
+     * Parse APP_URL-style value into hostnames (lowercase) for tunnel redirect rewriting.
+     * Includes a `www.` variant when the canonical host is not already www-prefixed.
+     *
+     * @return list<string>
+     */
+    public static function hostsFromAppUrlRaw(string $rawUrl): array
+    {
+        $raw = trim($rawUrl);
+        if ($raw === '') {
+            return [];
+        }
+        if (! str_contains($raw, '://')) {
+            $raw = 'http://'.$raw;
+        }
+        $p = parse_url($raw);
+        if (! is_array($p) || empty($p['host'])) {
+            return [];
+        }
+        $host = strtolower((string) $p['host']);
+        $out = [$host];
+        if (! str_starts_with($host, 'www.')) {
+            $out[] = 'www.'.$host;
+        }
+
+        return array_values(array_unique($out));
+    }
+
+    /**
+     * Hostnames from APP_URL in a project .env (walk upward from $startDir).
+     *
+     * @return list<string>
+     */
+    public static function appUrlHostsForTunnelRewrite(?string $startDir = null): array
+    {
+        $dir = $startDir ?? getcwd();
+        if ($dir === false || $dir === '') {
+            $dir = '.';
+        }
+        $envPath = self::findFileUpward($dir, ['.env', '.env.local', '.env.development']);
+        if ($envPath === null) {
+            return [];
+        }
+        $content = @file_get_contents($envPath);
+        if ($content === false) {
+            return [];
+        }
+        if (! preg_match('/^APP_URL\s*=\s*(.+)$/m', $content, $m)) {
+            return [];
+        }
+        $raw = trim($m[1], " \t\"'");
+        if (($p = strpos($raw, '#')) !== false) {
+            $raw = trim(substr($raw, 0, $p));
+        }
+
+        return self::hostsFromAppUrlRaw($raw);
+    }
+
     private static function runShellLine(string $cmd): string
     {
         $out = shell_exec($cmd);
