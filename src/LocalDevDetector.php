@@ -886,6 +886,13 @@ final class LocalDevDetector
         $scheme = strtolower((string) ($p['scheme'] ?? 'http'));
         $explicitPort = isset($p['port']) ? (int) $p['port'] : null;
 
+        // Skip generic loopback hosts so later detectors (Herd/Valet) can
+        // find the real .test domain instead of a bare localhost APP_URL.
+        $lower = strtolower($host);
+        if ($lower === 'localhost' || $lower === '127.0.0.1' || $lower === '::1') {
+            return null;
+        }
+
         $port = $explicitPort ?? ($scheme === 'https' ? 443 : 80);
 
         if (! self::tcpAccepts($host, $port)) {

@@ -142,6 +142,13 @@ final class GitHubPharRelease
             if ($preA !== $preB) {
                 return $preA <=> $preB;
             }
+            // Compare by semver (highest version first) before falling back to publish date.
+            $semA = self::tagToSemver($tagA);
+            $semB = self::tagToSemver($tagB);
+            $semCmp = version_compare($semB, $semA);
+            if ($semCmp !== 0) {
+                return $semCmp;
+            }
             $ta = strtotime((string) ($a['published_at'] ?? '')) ?: 0;
             $tb = strtotime((string) ($b['published_at'] ?? '')) ?: 0;
 
