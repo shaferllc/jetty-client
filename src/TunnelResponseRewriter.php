@@ -14,8 +14,16 @@ use DOMXPath;
  */
 final class TunnelResponseRewriter
 {
+    /** Bumps when tunnel rewrite / NDJSON diagnostics change (verify you are not on a stale PHAR). */
+    public const REWRITE_DEBUG_REV = 4;
+
     /** @var list<string> */
     private const DATA_URL_ATTRS = ['data-url', 'data-href', 'data-src', 'data-action'];
+
+    /** @var list<string>|null */
+    private static ?array $walkUpAdjacentAppUrlHostsCache = null;
+
+    private static string $walkUpAdjacentAppUrlHostsCacheKey = '';
 
     /**
      * Logs one line per tunneled HTTP request when debug is enabled (env JETTY_SHARE_DEBUG_REWRITE=1).
@@ -30,16 +38,16 @@ final class TunnelResponseRewriter
         int $localPort,
         array $requestHeaders,
     ): void {
-        // #region agent log
-        $ge = getenv('JETTY_SHARE_DEBUG_REWRITE');
-        self::agentDebugNdjson('H1', 'TunnelResponseRewriter::debugRewriteRequestContext', [
-            'request_id' => $requestId,
-            'getenv_JETTY_SHARE_DEBUG_REWRITE' => $ge === false ? '(false)' : $ge,
-            'debugRewriteEnabled' => self::debugRewriteEnabled(),
-            'method' => $method,
-            'path' => $path,
-        ]);
-        // #endregion
+        if (self::debugNdjsonLogPath() !== null) {
+            $ge = getenv('JETTY_SHARE_DEBUG_REWRITE');
+            self::agentDebugNdjson('H1', 'TunnelResponseRewriter::debugRewriteRequestContext', [
+                'request_id' => $requestId,
+                'getenv_JETTY_SHARE_DEBUG_REWRITE' => $ge === false ? '(false)' : $ge,
+                'debugRewriteEnabled' => self::debugRewriteEnabled(),
+                'method' => $method,
+                'path' => $path,
+            ]);
+        }
         if (! self::debugRewriteEnabled()) {
             return;
         }
@@ -74,31 +82,33 @@ final class TunnelResponseRewriter
         }
 
         $publicHost = self::requestHostLower($requestHeaders);
-        // #region agent log
-        $locForLog = '';
-        foreach ($responseHeaders as $nk => $nv) {
-            if (strcasecmp((string) $nk, 'Location') === 0) {
-                $locForLog = (string) $nv;
-                break;
+        if (self::debugNdjsonLogPath() !== null) {
+            $locForLog = '';
+            foreach ($responseHeaders as $nk => $nv) {
+                if (strcasecmp((string) $nk, 'Location') === 0) {
+                    $locForLog = (string) $nv;
+                    break;
+                }
             }
+            $locHost = '';
+            if ($locForLog !== '') {
+                $pu = parse_url($locForLog);
+                $locHost = is_array($pu) && isset($pu['host']) ? strtolower((string) $pu['host']) : '';
+            }
+            $lookupKeys = array_keys($rewriteHostsLookup);
+            sort($lookupKeys);
+            self::agentDebugNdjson('H2-H4-H5', 'TunnelResponseRewriter::rewriteRedirectHeaders:pre', [
+                'publicHost' => $publicHost,
+                'no_location_rewrite' => getenv('JETTY_SHARE_NO_LOCATION_REWRITE') === '1',
+                'lookup_size' => count($rewriteHostsLookup),
+                'lookup_host_sample' => array_slice($lookupKeys, 0, 12),
+                'location_host' => $locHost,
+                'location_in_lookup' => $locHost !== '' && isset($rewriteHostsLookup[$locHost]),
+                'location_preview' => self::truncateForLog($locForLog, 120),
+                'invocation_cwd' => self::shareInvocationDirectoryForAppUrl(),
+                'project_root_env_set' => getenv('JETTY_SHARE_PROJECT_ROOT') !== false,
+            ]);
         }
-        $locHost = '';
-        if ($locForLog !== '') {
-            $pu = parse_url($locForLog);
-            $locHost = is_array($pu) && isset($pu['host']) ? strtolower((string) $pu['host']) : '';
-        }
-        $lookupKeys = array_keys($rewriteHostsLookup);
-        sort($lookupKeys);
-        self::agentDebugNdjson('H2-H4-H5', 'TunnelResponseRewriter::rewriteRedirectHeaders:pre', [
-            'publicHost' => $publicHost,
-            'no_location_rewrite' => getenv('JETTY_SHARE_NO_LOCATION_REWRITE') === '1',
-            'lookup_size' => count($rewriteHostsLookup),
-            'lookup_host_sample' => array_slice($lookupKeys, 0, 12),
-            'location_host' => $locHost,
-            'location_in_lookup' => $locHost !== '' && isset($rewriteHostsLookup[$locHost]),
-            'location_preview' => self::truncateForLog($locForLog, 120),
-        ]);
-        // #endregion
         if ($publicHost === '') {
             if (self::debugRewriteEnabled()) {
                 self::debugRewriteLine('redirect_headers: skipped (no tunnel Host on request)');
@@ -198,6 +208,73 @@ final class TunnelResponseRewriter
     }
 
     /**
+     * Directory captured at {@code jetty share} startup (see {@see Application::cmdShare}) so APP_URL
+     * discovery still works when the edge agent runs under a different working directory.
+     */
+    private static function shareInvocationDirectoryForAppUrl(): string
+    {
+        $inv = getenv('JETTY_SHARE_INVOCATION_CWD');
+        if (is_string($inv) && trim($inv) !== '') {
+            return trim($inv);
+        }
+        $cw = getcwd();
+        if ($cw !== false && $cw !== '') {
+            return $cw;
+        }
+
+        return '.';
+    }
+
+    /**
+     * Walk upward from the invocation directory and merge APP_URL hosts from Laravel apps in each
+     * directory's immediate children (e.g. share run from {@code …/jetty/jetty-client} discovers
+     * {@code …/dply} next to {@code …/jetty}). Cached for the lifetime of the PHP process.
+     *
+     * @param  callable(string): void  $add
+     */
+    private static function addWalkUpAdjacentArtisanAppUrlHosts(string $invocationCwd, callable $add): void
+    {
+        if (getenv('JETTY_SHARE_NO_ADJACENT_LARAVEL_SCAN') === '1') {
+            return;
+        }
+        $pr = getenv('JETTY_SHARE_PROJECT_ROOT');
+        $prKey = is_string($pr) ? trim($pr) : '';
+        $cacheKey = trim($invocationCwd)."\0".$prKey;
+        if (self::$walkUpAdjacentAppUrlHostsCache !== null && self::$walkUpAdjacentAppUrlHostsCacheKey === $cacheKey) {
+            foreach (self::$walkUpAdjacentAppUrlHostsCache as $h) {
+                $add($h);
+            }
+
+            return;
+        }
+        $seen = [];
+        $dir = trim($invocationCwd);
+        if ($dir === '') {
+            $dir = '.';
+        }
+        $rp = realpath($dir);
+        $dir = $rp !== false ? $rp : $dir;
+        for ($i = 0; $i < 64; $i++) {
+            if ($dir === '' || ! is_dir($dir)) {
+                break;
+            }
+            foreach (LocalDevDetector::appUrlHostsFromAdjacentArtisanProjects($dir) as $h) {
+                $seen[strtolower($h)] = true;
+            }
+            $parent = dirname($dir);
+            if ($parent === $dir) {
+                break;
+            }
+            $dir = $parent;
+        }
+        self::$walkUpAdjacentAppUrlHostsCache = array_keys($seen);
+        self::$walkUpAdjacentAppUrlHostsCacheKey = $cacheKey;
+        foreach (self::$walkUpAdjacentAppUrlHostsCache as $h) {
+            $add($h);
+        }
+    }
+
+    /**
      * @return array<string, true>
      */
     public static function tunnelRewriteHostLookup(string $localHost): array
@@ -214,6 +291,10 @@ final class TunnelResponseRewriter
             }
         };
         $add($localHost);
+        $cliUpstream = getenv('JETTY_SHARE_CLI_UPSTREAM_HOSTNAME');
+        if (is_string($cliUpstream) && trim($cliUpstream) !== '') {
+            $add(trim($cliUpstream));
+        }
         $extra = getenv('JETTY_SHARE_REWRITE_HOSTS');
         if (is_string($extra) && $extra !== '') {
             foreach (explode(',', $extra) as $part) {
@@ -225,10 +306,8 @@ final class TunnelResponseRewriter
         if (is_string($projectRoot) && trim($projectRoot) !== '') {
             $appUrlRoots[] = trim($projectRoot);
         }
-        $cwd = getcwd();
-        if ($cwd !== false && $cwd !== '') {
-            $appUrlRoots[] = $cwd;
-        }
+        $invocationCwd = self::shareInvocationDirectoryForAppUrl();
+        $appUrlRoots[] = $invocationCwd;
         $seenRoot = [];
         foreach ($appUrlRoots as $root) {
             $root = trim($root);
@@ -246,6 +325,7 @@ final class TunnelResponseRewriter
                 $add($h);
             }
         }
+        self::addWalkUpAdjacentArtisanAppUrlHosts($invocationCwd, $add);
         $appUrlEnv = getenv('APP_URL');
         if (is_string($appUrlEnv) && $appUrlEnv !== '') {
             foreach (LocalDevDetector::hostsFromAppUrlRaw($appUrlEnv) as $h) {
@@ -684,21 +764,73 @@ final class TunnelResponseRewriter
         return $n.' host(s): '.implode(', ', $preview).$tail;
     }
 
+    private static function debugNdjsonLogPath(): ?string
+    {
+        $raw = getenv('JETTY_SHARE_DEBUG_NDJSON_FILE');
+        if (! is_string($raw)) {
+            return null;
+        }
+        $path = trim($raw);
+
+        return $path !== '' ? $path : null;
+    }
+
+    /**
+     * Append one NDJSON line when {@code JETTY_SHARE_DEBUG_NDJSON_FILE} is set (absolute path recommended).
+     * Each line: {@code event}, {@code ts_ms}, {@code rewrite_debug_rev}, {@code data}.
+     *
+     * @param  array<string, mixed>  $data
+     */
+    public static function emitDebugNdjson(string $event, array $data): void
+    {
+        $path = self::debugNdjsonLogPath();
+        if ($path === null) {
+            return;
+        }
+        $line = json_encode([
+            'ts_ms' => (int) round(microtime(true) * 1000),
+            'event' => $event,
+            'rewrite_debug_rev' => self::REWRITE_DEBUG_REV,
+            'data' => $data,
+        ], JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE);
+        if ($line === false) {
+            return;
+        }
+        @file_put_contents($path, $line."\n", FILE_APPEND | LOCK_EX);
+    }
+
     /**
      * @param  array<string, mixed>  $data
      */
     private static function agentDebugNdjson(string $hypothesisId, string $location, array $data): void
     {
-        // #region agent log
-        $payload = [
-            'sessionId' => '96e82a',
+        $cli = getenv('JETTY_SHARE_CLI_UPSTREAM_HOSTNAME');
+        self::emitDebugNdjson('rewrite.'.$hypothesisId, array_merge($data, [
             'hypothesisId' => $hypothesisId,
             'location' => $location,
-            'message' => 'jetty share debug',
-            'data' => $data,
-            'timestamp' => (int) round(microtime(true) * 1000),
-        ];
-        @file_put_contents('/Users/tomshafer/Projects/Apps/dply/.cursor/debug-96e82a.log', json_encode($payload, JSON_UNESCAPED_SLASHES)."\n", FILE_APPEND | LOCK_EX);
-        // #endregion
+            'cli_upstream_hostname' => is_string($cli) && trim($cli) !== '' ? trim($cli) : null,
+        ]));
+    }
+
+    /**
+     * @param  array<string, mixed>  $data
+     */
+    public static function debugSessionNdjson(string $hypothesisId, string $location, array $data): void
+    {
+        $cli = getenv('JETTY_SHARE_CLI_UPSTREAM_HOSTNAME');
+        self::emitDebugNdjson('session.'.$hypothesisId, array_merge($data, [
+            'hypothesisId' => $hypothesisId,
+            'location' => $location,
+            'cli_upstream_hostname' => is_string($cli) && trim($cli) !== '' ? trim($cli) : null,
+        ]));
+    }
+
+    /**
+     * @internal PHPUnit / deterministic tests only
+     */
+    public static function resetWalkUpAdjacentAppUrlCacheForTesting(): void
+    {
+        self::$walkUpAdjacentAppUrlHostsCache = null;
+        self::$walkUpAdjacentAppUrlHostsCacheKey = '';
     }
 }

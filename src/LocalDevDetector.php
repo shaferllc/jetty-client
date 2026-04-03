@@ -945,6 +945,48 @@ final class LocalDevDetector
     }
 
     /**
+     * APP_URL hosts from Laravel apps in immediate subdirectories of {@code $cwd} (e.g. monorepo root
+     * with {@code apps/my-app/artisan}).
+     *
+     * Bounded to 48 directories that contain an {@code artisan} file. Opt out with
+     * {@code JETTY_SHARE_NO_ADJACENT_LARAVEL_SCAN=1}.
+     *
+     * @return list<string>
+     */
+    public static function appUrlHostsFromAdjacentArtisanProjects(string $cwd): array
+    {
+        $cwd = trim($cwd);
+        if ($cwd === '' || ! is_dir($cwd)) {
+            return [];
+        }
+        $out = [];
+        if (is_file($cwd.\DIRECTORY_SEPARATOR.'artisan')) {
+            foreach (self::appUrlHostsForTunnelRewrite($cwd) as $h) {
+                $out[] = $h;
+            }
+        }
+        $n = 0;
+        foreach (scandir($cwd) ?: [] as $entry) {
+            if ($entry === '.' || $entry === '..') {
+                continue;
+            }
+            if ($n >= 48) {
+                break;
+            }
+            $sub = $cwd.\DIRECTORY_SEPARATOR.$entry;
+            if (! is_dir($sub) || ! is_file($sub.\DIRECTORY_SEPARATOR.'artisan')) {
+                continue;
+            }
+            $n++;
+            foreach (self::appUrlHostsForTunnelRewrite($sub) as $h) {
+                $out[] = $h;
+            }
+        }
+
+        return array_values(array_unique($out));
+    }
+
+    /**
      * Hostnames from APP_URL in a project .env (walk upward from $startDir).
      *
      * @return list<string>

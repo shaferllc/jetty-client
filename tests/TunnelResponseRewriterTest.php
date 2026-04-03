@@ -4,12 +4,19 @@ declare(strict_types=1);
 
 namespace JettyCli\Tests;
 
+use JettyCli\LocalDevDetector;
 use JettyCli\TunnelResponseRewriter;
 use JettyCli\TunnelRewriteOptions;
 use PHPUnit\Framework\TestCase;
 
 final class TunnelResponseRewriterTest extends TestCase
 {
+    protected function tearDown(): void
+    {
+        TunnelResponseRewriter::resetWalkUpAdjacentAppUrlCacheForTesting();
+        parent::tearDown();
+    }
+
     public function test_rewrite_absolute_url_to_tunnel(): void
     {
         $lookup = ['127.0.0.1' => true];
@@ -186,6 +193,92 @@ final class TunnelResponseRewriterTest extends TestCase
             }
             unlink($tmpdir.'/.env');
             rmdir($tmpdir);
+        }
+    }
+
+    public function test_tunnel_rewrite_host_lookup_walk_up_finds_peer_artisan_app(): void
+    {
+        $prevInv = getenv('JETTY_SHARE_INVOCATION_CWD');
+        $base = sys_get_temp_dir().'/jetty-walk-'.uniqid('', true);
+        mkdir($base.'/peer-app', 0700, true);
+        file_put_contents($base.'/peer-app/artisan', "<?php\n");
+        file_put_contents($base.'/peer-app/.env', "APP_URL=https://fixture-peer-walk.test\n");
+        mkdir($base.'/z/nested/jetty-client', 0700, true);
+
+        putenv('JETTY_SHARE_INVOCATION_CWD='.$base.'/z/nested/jetty-client');
+        try {
+            $lookup = TunnelResponseRewriter::tunnelRewriteHostLookup('127.0.0.1');
+            $this->assertArrayHasKey('fixture-peer-walk.test', $lookup);
+        } finally {
+            if ($prevInv === false) {
+                putenv('JETTY_SHARE_INVOCATION_CWD');
+            } else {
+                putenv('JETTY_SHARE_INVOCATION_CWD='.$prevInv);
+            }
+            unlink($base.'/peer-app/.env');
+            unlink($base.'/peer-app/artisan');
+            rmdir($base.'/peer-app');
+            rmdir($base.'/z/nested/jetty-client');
+            rmdir($base.'/z/nested');
+            rmdir($base.'/z');
+            rmdir($base);
+        }
+    }
+
+    public function test_adjacent_artisan_scan_includes_artisan_at_scan_root(): void
+    {
+        $base = sys_get_temp_dir().'/jetty-root-artisan-'.uniqid('', true);
+        mkdir($base, 0700, true);
+        file_put_contents($base.'/artisan', "<?php\n");
+        file_put_contents($base.'/.env', "APP_URL=https://fixture-root-artisan.test\n");
+        try {
+            $hosts = LocalDevDetector::appUrlHostsFromAdjacentArtisanProjects($base);
+            $this->assertContains('fixture-root-artisan.test', $hosts);
+        } finally {
+            unlink($base.'/.env');
+            unlink($base.'/artisan');
+            rmdir($base);
+        }
+    }
+
+    public function test_tunnel_rewrite_lookup_merges_jetty_share_cli_upstream_hostname(): void
+    {
+        $prev = getenv('JETTY_SHARE_CLI_UPSTREAM_HOSTNAME');
+        putenv('JETTY_SHARE_CLI_UPSTREAM_HOSTNAME=fixture-cli-upstream.test');
+        try {
+            $lookup = TunnelResponseRewriter::tunnelRewriteHostLookup('127.0.0.1');
+            $this->assertArrayHasKey('fixture-cli-upstream.test', $lookup);
+        } finally {
+            if ($prev === false) {
+                putenv('JETTY_SHARE_CLI_UPSTREAM_HOSTNAME');
+            } else {
+                putenv('JETTY_SHARE_CLI_UPSTREAM_HOSTNAME='.$prev);
+            }
+        }
+    }
+
+    public function test_emit_debug_ndjson_appends_json_line_when_env_set(): void
+    {
+        $prev = getenv('JETTY_SHARE_DEBUG_NDJSON_FILE');
+        $tmp = sys_get_temp_dir().'/jetty-ndj-'.uniqid('', true).'.ndjson';
+        putenv('JETTY_SHARE_DEBUG_NDJSON_FILE='.$tmp);
+        try {
+            TunnelResponseRewriter::emitDebugNdjson('test.event', ['k' => 'v']);
+            $this->assertFileExists($tmp);
+            $line = trim((string) file_get_contents($tmp));
+            $dec = json_decode($line, true);
+            $this->assertIsArray($dec);
+            $this->assertSame('test.event', $dec['event']);
+            $this->assertSame('v', $dec['data']['k']);
+            $this->assertArrayHasKey('ts_ms', $dec);
+            $this->assertSame(TunnelResponseRewriter::REWRITE_DEBUG_REV, $dec['rewrite_debug_rev']);
+        } finally {
+            @unlink($tmp);
+            if ($prev === false) {
+                putenv('JETTY_SHARE_DEBUG_NDJSON_FILE');
+            } else {
+                putenv('JETTY_SHARE_DEBUG_NDJSON_FILE='.$prev);
+            }
         }
     }
 }

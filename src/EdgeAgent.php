@@ -753,6 +753,15 @@ final class EdgeAgent
         $parsedHeaders = self::parseResponseHeaders($headerBlock);
         $beforeRedirectRewrite = $parsedHeaders;
         $lookup = TunnelResponseRewriter::tunnelRewriteHostLookup($localHost);
+        $invCwdLog = getenv('JETTY_SHARE_INVOCATION_CWD');
+        $cliLog = getenv('JETTY_SHARE_CLI_UPSTREAM_HOSTNAME');
+        TunnelResponseRewriter::emitDebugNdjson('edge.http_upstream_lookup', [
+            'localHost' => $localHost,
+            'localPort' => $localPort,
+            'lookup_size' => count($lookup),
+            'invocation_cwd' => is_string($invCwdLog) && $invCwdLog !== '' ? $invCwdLog : null,
+            'cli_upstream_hostname' => is_string($cliLog) && trim($cliLog) !== '' ? trim($cliLog) : null,
+        ]);
         $rewriteRequestHeaders = TunnelResponseRewriter::requestHeadersWithRewriteTunnelHostFallback($headers, $publicTunnelHostForRewrite);
         TunnelResponseRewriter::debugRewriteRequestContext($requestId, $method, $path, $localHost, $localPort, $rewriteRequestHeaders);
         $outHeaders = TunnelResponseRewriter::rewriteRedirectHeaders($parsedHeaders, $rewriteRequestHeaders, $lookup);

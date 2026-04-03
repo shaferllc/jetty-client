@@ -124,12 +124,16 @@ The edge WebSocket agent rewrites responses so the **browser stays on `https://{
 **HTTP headers:** **`Location`**, **`X-Inertia-Location`**, and **`Refresh`** (`meta` refresh–style `url=`) are rewritten when the target host is in the lookup set:
 
 - The **upstream** host you’re sharing (e.g. **`127.0.0.1`** or **`myapp.test`**),
+- **`JETTY_SHARE_CLI_UPSTREAM_HOSTNAME`** — optional single hostname added to the lookup when you proxy an IP but the app emits redirects for a **Valet/Herd-style** name (use **`JETTY_SHARE_REWRITE_HOSTS`** or **`--site`** when you can),
 - **`APP_URL`** from a walked-up **`.env`** and/or the **`APP_URL`** environment variable,
 - Extra hosts from **`JETTY_SHARE_REWRITE_HOSTS`** (comma-separated), e.g. **`myapp.test,www.myapp.test`**.
+- **Monorepo / multi-app trees:** From **`JETTY_SHARE_INVOCATION_CWD`** (set automatically at **`jetty share` start**), Jetty **walks upward** (bounded) and, at each directory level, merges **APP_URL** hosts from (a) **subdirectories** that contain **`artisan`** (up to **48** per level) and (b) **that level itself** if it contains **`artisan`** (so sharing from the Laravel app root still picks up that app’s **APP_URL**). This helps nested paths like **`packages/cli`** discover **`apps/api`** higher in the tree. Opt out with **`JETTY_SHARE_NO_ADJACENT_LARAVEL_SCAN=1`**. **`JETTY_SHARE_PROJECT_ROOT`** still forces an extra root for walked-up **`.env`** discovery.
 
 Opt out of header rewriting: **`JETTY_SHARE_NO_LOCATION_REWRITE=1`**.
 
 **Debugging redirects (local):** set **`JETTY_SHARE_DEBUG_REWRITE=1`** in the environment where you run **`jetty share`**. The CLI prints **`[jetty share rewrite]`** lines to **stderr** for each request through the tunnel: the browser **`Host`** (tunnel hostname), the **upstream** URL, a short preview of the **rewrite-host lookup**, each **`Location` / `X-Inertia-Location` / `Refresh`** value (before → after when rewritten), and **`absolute_url:`** lines when a URL was **not** rewritten (e.g. host not in the lookup). Use this to see whether the app is emitting a **`https://…tunnels…`** URL from an **old tunnel label** or another host: add that hostname to **`JETTY_SHARE_REWRITE_HOSTS`** so it can be rewritten to the **current** tunnel **`Host`**.
+
+**Append-only NDJSON file (optional):** set **`JETTY_SHARE_DEBUG_NDJSON_FILE=/absolute/path/events.ndjson`** to append one JSON object per line: top-level **`event`**, **`ts_ms`**, **`rewrite_debug_rev`** (see **`TunnelResponseRewriter::REWRITE_DEBUG_REV`** — bump when diagnostics format changes), and **`data`**. **`edge.http_upstream_lookup`** fires after each proxied response; **`rewrite.*`** lines complement **`JETTY_SHARE_DEBUG_REWRITE=1`** stderr. Unset or empty disables file writes.
 
 **Debugging the edge agent (WebSocket + local curl):** set **`JETTY_SHARE_DEBUG_AGENT=1`**, run **`jetty share --debug-agent`**, or set **`share.debug_agent`** to **`true`** in **`jetty.config.json`**. The CLI prints one **JSON object per line** on **stderr**, each prefixed with **`[jetty:agent-debug]`**. Every object includes **`event`**, **`ts_ms`**, and base fields **`tunnel_id`**, **`local_upstream`**, **`public_tunnel_host`**. Notable **`event`** values include **`ws_connect_attempt`**, **`ws_connected`**, **`ws_connect_failed`**, **`register_sent`**, **`registered`**, **`ws_receive_loop_start`**, **`http_request_in`** (redacted edge headers), **`http_upstream_begin`** / **`http_upstream_response`** / **`http_upstream_error`**, **`http_tunnel_rewrite`** (redirect diffs, body byte delta, rewrite flags), **`http_response_sent`**, **`bridge_sample_queued`**, **`ws_frame_ignored`**, **`http_request_json_error`**, reconnect **`ws_reconnect_backoff`**, and **`ws_session_closed_will_reconnect`**. Bridge REST heartbeats are noisy; opt in with **`JETTY_SHARE_DEBUG_AGENT_HEARTBEATS=1`**. **`EdgeAgent::run(…, $yourCallback)`** accepts the same **`(string $event, array $context): void`** callback for custom tooling.
 
@@ -164,7 +168,7 @@ The **Jetty Bridge** web app (Laravel) ships long-form docs you should read when
 
 | Topic | Where |
 |--------|--------|
-| **Architecture** (Bridge, jetty-edge, CLI, WebSocket frames) | [Tunnels: CLI and Bridge reference](https://usejetty.online/docs/getting-started/tunnels-reference) — use your Bridge base URL if it isn’t the default host |
+| **Architecture** (Bridge, jetty-edge, CLI, WebSocket frames, rewrite discovery, operator env, Prometheus) | [Tunnels: CLI and Bridge reference](https://usejetty.online/docs/getting-started/tunnels-reference) — use your Bridge base URL if it isn’t the default host |
 | **Quick recipes** (port, `--site`, Valet TLS) | [Sharing local sites](https://usejetty.online/docs/getting-started/sharing) |
 | **Install** | [Installation](https://usejetty.online/docs/getting-started/installation) |
 | **Operators** (edge binary, nginx, secrets) | Signed-in: *Network and edge deployment* in the dashboard |

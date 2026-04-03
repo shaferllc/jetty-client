@@ -1419,7 +1419,16 @@ final class Application
             return 0;
         }
 
+        $cw0 = getcwd();
+        if ($cw0 !== false) {
+            $rp0 = realpath($cw0);
+            putenv('JETTY_SHARE_INVOCATION_CWD='.($rp0 !== false ? $rp0 : $cw0));
+        }
+        putenv('JETTY_SHARE_CLI_UPSTREAM_HOSTNAME');
+
         $localHost = '127.0.0.1';
+        /** @var non-empty-string|null  Last non-IP --site/--host value for tunnel redirect rewriting */
+        $shareCliHostnameForRewrite = null;
         $upstreamExplicit = false;
         $tunnelServerFlag = null;
         $printUrlOnly = false;
@@ -1516,30 +1525,35 @@ final class Application
             if (str_starts_with($arg, '--site=')) {
                 $localHost = $this->parseShareUpstreamValue($arg, '--site=');
                 $upstreamExplicit = true;
+                $this->shareMaybeSetCliHostnameForRewrite($shareCliHostnameForRewrite, $localHost);
 
                 continue;
             }
             if (str_starts_with($arg, '--bind=')) {
                 $localHost = $this->parseShareUpstreamValue($arg, '--bind=');
                 $upstreamExplicit = true;
+                $this->shareMaybeSetCliHostnameForRewrite($shareCliHostnameForRewrite, $localHost);
 
                 continue;
             }
             if (str_starts_with($arg, '--local=')) {
                 $localHost = $this->parseShareUpstreamValue($arg, '--local=');
                 $upstreamExplicit = true;
+                $this->shareMaybeSetCliHostnameForRewrite($shareCliHostnameForRewrite, $localHost);
 
                 continue;
             }
             if (str_starts_with($arg, '--local-host=')) {
                 $localHost = $this->parseShareUpstreamValue($arg, '--local-host=');
                 $upstreamExplicit = true;
+                $this->shareMaybeSetCliHostnameForRewrite($shareCliHostnameForRewrite, $localHost);
 
                 continue;
             }
             if (str_starts_with($arg, '--host=')) {
                 $localHost = $this->parseShareUpstreamValue($arg, '--host=');
                 $upstreamExplicit = true;
+                $this->shareMaybeSetCliHostnameForRewrite($shareCliHostnameForRewrite, $localHost);
 
                 continue;
             }
@@ -1600,6 +1614,10 @@ final class Application
                 throw new \InvalidArgumentException('Unknown option: '.$arg."\n".$this->shareUsageSummary());
             }
             $positional[] = $arg;
+        }
+
+        if ($shareCliHostnameForRewrite !== null) {
+            putenv('JETTY_SHARE_CLI_UPSTREAM_HOSTNAME='.$shareCliHostnameForRewrite);
         }
 
         if (count($positional) > 1) {
@@ -1849,6 +1867,23 @@ final class Application
                 : null;
             if ($shareDebugAgent) {
                 $this->stderr("Agent debug: structured JSON lines on stderr (prefix [jetty:agent-debug]).\n");
+            }
+            $ndjsonFile = getenv('JETTY_SHARE_DEBUG_NDJSON_FILE');
+            if (getenv('JETTY_SHARE_DEBUG_REWRITE') === '1' && (! is_string($ndjsonFile) || trim($ndjsonFile) === '')) {
+                $this->stderr(
+                    "[jetty share] JETTY_SHARE_DEBUG_REWRITE=1 but JETTY_SHARE_DEBUG_NDJSON_FILE is unset — file NDJSON is disabled.\n"
+                    .'  export JETTY_SHARE_DEBUG_NDJSON_FILE="/abs/path/debug.ndjson"  (each line: {"event","ts_ms","rewrite_debug_rev","data"}; rev '.TunnelResponseRewriter::REWRITE_DEBUG_REV.").\n"
+                    ."  If your log still shows top-level sessionId/hypothesisId (no rewrite_debug_rev), rebuild the PHAR or run php bin/jetty from jetty-client.\n"
+                );
+            }
+            $rewriteHostProbe = TunnelResponseRewriter::tunnelRewriteHostLookup($localHost);
+            $rewriteHostProbeCount = count($rewriteHostProbe);
+            if ($rewriteHostProbeCount <= 2 && filter_var($localHost, FILTER_VALIDATE_IP)) {
+                $this->ui()->warnLine(
+                    'Tunnel redirect rewrite only knows '.$rewriteHostProbeCount.' host(s) for upstream '.$localHost.'. '
+                    .'If the browser jumps off the tunnel, run `jetty share` from this source tree (`php bin/jetty` or rebuild your PHAR), '
+                    .'or `cd` into your Laravel app, set JETTY_SHARE_PROJECT_ROOT, or use --site=your-site.test.'
+                );
             }
             if (! $printUrlOnly && ! $skipEdge && $ws !== '' && $agentToken !== '') {
                 try {
@@ -2242,6 +2277,18 @@ final class Application
             : 'Press Ctrl+C to stop this session (tunnel stays registered until you remove it in the web app).';
 
         return 'HTTP via the public URL will not reach your app until you run `jetty share` again or the agent reconnects. '.$tail."\n";
+    }
+
+    /**
+     * @param  non-empty-string|null  $slot
+     */
+    private function shareMaybeSetCliHostnameForRewrite(?string &$slot, string $candidate): void
+    {
+        $c = strtolower(trim($candidate));
+        if ($c === '' || filter_var($c, FILTER_VALIDATE_IP)) {
+            return;
+        }
+        $slot = $c;
     }
 
     private function parseShareUpstreamValue(string $arg, string $prefix): string
@@ -2652,8 +2699,10 @@ TXT;
 
   jetty share — dozens of optional JETTY_SHARE_* toggles (upstream, resume, health, rewrite, body/js/css,
   edge reconnect, WebSocket ping, idle prompt, request samples, debug). Full list and defaults: jetty-client/README.md
-  Common: JETTY_SHARE_UPSTREAM=URL  JETTY_SHARE_REWRITE_HOSTS=h1,h2  JETTY_SHARE_NO_DETECT=1
+  Common: JETTY_SHARE_UPSTREAM=URL  JETTY_SHARE_REWRITE_HOSTS=h1,h2  JETTY_SHARE_CLI_UPSTREAM_HOSTNAME=myapp.test  JETTY_SHARE_NO_DETECT=1
   Debug stderr: JETTY_SHARE_DEBUG_REWRITE=1  JETTY_SHARE_DEBUG_AGENT=1
+  File NDJSON: JETTY_SHARE_DEBUG_NDJSON_FILE=/abs/path.ndjson  (event/ts_ms/rewrite_debug_rev/data; pairs with DEBUG_REWRITE)
+  Monorepo rewrite: JETTY_SHARE_NO_ADJACENT_LARAVEL_SCAN=1
   Opt out of extras: JETTY_SHARE_CAPTURE_SAMPLES=0  JETTY_SHARE_TELEMETRY=0
 
   jetty replay
@@ -2666,7 +2715,9 @@ TXT;
   JETTY_LOCAL_PHAR_URL       Force PHAR downloads from this URL (else GitHub)
   JETTY_SKIP_UPDATE_NOTICE=1 Suppress “update available” hint after commands
 
-  Bridge app (.env): see .env.example and config/jetty.php (tunnel host, edge, plans, Telegram, …).
+  Bridge app (.env): see .env.example and config/jetty.php (tunnel host, edge, plans, Telegram,
+  JETTY_TUNNEL_LOCAL_HOST_ALLOWLIST, request-sample redaction, prune/degraded scheduler, …).
+  jetty-edge host: JETTY_EDGE_METRICS_ADDR / JETTY_EDGE_METRICS_TOKEN (Prometheus); deploy/systemd/README.md
 
 TXT;
     }
