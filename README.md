@@ -6,6 +6,38 @@ Composer package **`jetty/client`**: PHP build of the **`jetty`** CLI for the [J
 
 **`jetty share` (no port):** walks up from the current directory and tries many local-dev signals in order: **`JETTY_SHARE_UPSTREAM`** (optional override; applied even if that port is not listening yet), Laravel **`.env` `APP_URL`**, Bedrock **`APP_URL`**, **`herd links`** / **`valet links`**, **DDEV** / **Lando**, **Symfony** `.symfony.local.yaml`, **Laravel Sail** / **Docker Compose** published ports, **wp-env** / **Craft Nitro**, **Vite** / **Nuxt** / **Astro** / **SvelteKit** configs, **Next.js** / **Remix** / **Gatsby** defaults, **devcontainer** `forwardPorts`, **Caddyfile**, generic **`.env` `PORT`**, **package.json** heuristics (Strapi, Directus, etc.), **MAMP** path under `htdocs`, **PhpStorm** `.idea/php.xml`. Otherwise scans common ports on `127.0.0.1`. Use **`--no-detect`** or **`JETTY_SHARE_NO_DETECT=1`** to skip detection. **`--serve`** / **`--serve=path`** starts **`php -S`** (default docroot `./public` or `.`) and tunnels to it for quick static sites.
 
+## Run from source (local testing, no publish)
+
+From this directory after dependencies are installed, the launcher resolves `vendor/autoload.php` in the package root—no Packagist release required.
+
+```bash
+cd jetty-client
+composer install
+php bin/jetty version
+# or: ./vendor/bin/jetty version   (Composer symlink to bin/jetty)
+# or: composer run jetty -- version
+```
+
+Pass CLI args after `--`:
+
+```bash
+composer run jetty -- share 8000 --verbose
+php bin/jetty share 8000 --no-js-rewrite
+```
+
+**Use this checkout inside another app** (path repository) so `jetty` runs your working tree:
+
+```json
+"repositories": [
+    { "type": "path", "url": "../jetty-client", "options": { "symlink": true } }
+],
+"require": {
+    "jetty/client": "@dev"
+}
+```
+
+Then `composer update jetty/client` and use `vendor/bin/jetty` from that app.
+
 ## Install
 
 ```bash
@@ -92,6 +124,8 @@ Opt out of header rewriting: **`JETTY_SHARE_NO_LOCATION_REWRITE=1`**.
 - Max body size to process (bytes): **`JETTY_SHARE_BODY_REWRITE_MAX_BYTES`** (default **4194304**).
 
 **CLI (same run, overrides env):** **`jetty share --no-body-rewrite`**, **`--no-js-rewrite`**, **`--no-css-rewrite`**.
+
+**Edge WebSocket drops (“HTTP forwarding paused”):** Heartbeats use the REST API; the **agent** uses a separate **`wss://…/agent`** connection. If that socket goes idle, some proxies close it (~60s). The CLI sends a **WebSocket ping every 25s** to keep `/agent` alive; disable only for debugging with **`JETTY_SHARE_NO_WS_PING=1`**. If disconnects persist, raise **`proxy_read_timeout`** on nginx for the tunnel host (see Bridge edge deployment docs). Run **`jetty share` again** to reconnect the agent.
 
 Dynamic JS (concatenated URLs) may still escape; list every host your app emits in **`JETTY_SHARE_REWRITE_HOSTS`**. Optional app-side tweaks (e.g. Laravel **`URL::forceRootUrl`**, Rails **`default_url_options`**, Next **`assetPrefix`**) can complement the agent but are not required.
 

@@ -2035,6 +2035,7 @@ TXT;
   JETTY_SHARE_NO_JS_REWRITE=1     Disable JS string URL rewriting only (default: on when body rewrite on)
   JETTY_SHARE_NO_CSS_REWRITE=1    Disable CSS url() rewriting only (default: on when body rewrite on)
   JETTY_SHARE_BODY_REWRITE_MAX_BYTES  Max response body size to rewrite (default 4194304)
+  JETTY_SHARE_NO_WS_PING=1      jetty share: disable periodic WebSocket ping (not recommended; proxies may idle-close /agent)
   JETTY_SHARE_IDLE_DISABLE=1    jetty share: disable idle prompt + auto-remove (see idle vars below)
   JETTY_SHARE_IDLE_PROMPT_MINUTES  After this many minutes without HTTP (default 120), prompt to keep or remove; 0 disables
   JETTY_SHARE_IDLE_GRACE_MINUTES   After the prompt, minutes to type keep or get traffic (default 60)

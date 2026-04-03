@@ -6,7 +6,7 @@ namespace JettyCli;
 
 final class ApiClient
 {
-    public const VERSION = '0.1.16';
+    public const VERSION = '0.1.17';
 
     /** Default GitHub owner/repo for PHAR `jetty update` / `self-update` when JETTY_*_REPO env is unset (matches Bridge config/jetty.php cli_github_repo). */
     public const DEFAULT_PHAR_RELEASES_REPO = 'shaferllc/jetty';

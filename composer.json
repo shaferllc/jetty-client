@@ -4,7 +4,7 @@
     "type": "library",
     "license": "MIT",
     "keywords": ["jetty", "tunnel", "cli", "api"],
-    "version": "0.1.16",
+    "version": "0.1.17",
     "require": {
         "php": "^8.2",
         "ext-curl": "*",
@@ -36,7 +36,8 @@
     },
     "scripts": {
         "build-phar": "box compile --no-interaction",
-        "test": "phpunit"
+        "test": "phpunit",
+        "jetty": "php bin/jetty"
     },
     "autoload-dev": {
         "psr-4": {

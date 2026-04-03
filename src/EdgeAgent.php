@@ -196,6 +196,30 @@ final class EdgeAgent
                     $v('heartbeat task exiting');
                 })->ignore();
 
+                // Proxies often close idle WebSockets (~60s) even when the TCP session looks open.
+                // RFC6455 pings keep the edge/agent link alive between HTTP requests.
+                async(function () use ($conn, $state, $v, $verbose): void {
+                    while ($state->running) {
+                        delay(25.0);
+                        if (! $state->running) {
+                            break;
+                        }
+                        if (getenv('JETTY_SHARE_NO_WS_PING') === '1') {
+                            continue;
+                        }
+                        try {
+                            $conn->ping();
+                            if ($verbose) {
+                                $v('websocket ping sent');
+                            }
+                        } catch (\Throwable $e) {
+                            $v('websocket ping failed: '.$e->getMessage());
+
+                            break;
+                        }
+                    }
+                })->ignore();
+
                 try {
                     $msgNum = 0;
                     while ($state->running) {
