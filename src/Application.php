@@ -1087,7 +1087,6 @@ final class Application
         $out = curl_exec($ch);
         $err = curl_error($ch);
         $code = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        curl_close($ch);
 
         if ($out === false) {
             throw new \RuntimeException('replay failed: '.$err);
@@ -1761,6 +1760,7 @@ final class Application
                         fn (string $m) => $this->stderr($m),
                         $shareVerbose,
                         $shareRewriteOptions,
+                        $curlHost,
                     );
                 } catch (\Throwable $e) {
                     $edgeFailDetail = $e->getMessage();
@@ -2299,7 +2299,6 @@ TXT;
         $errno = curl_errno($ch);
         $err = curl_error($ch);
         $status = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        curl_close($ch);
 
         if ($raw === false || $errno !== 0) {
             throw new \RuntimeException(

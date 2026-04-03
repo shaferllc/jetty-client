@@ -55,6 +55,7 @@ final class EdgeAgent
      * Runs heartbeats concurrently (same interval as {@see Application} share loop).
      *
      * @param  callable(string): void  $stderr  Always receives errors and important status lines
+     * @param  string|null  $publicTunnelHostForRewrite  Host from Bridge public_url; used when edge frames omit Host so redirects/HTML can rewrite to the tunnel
      */
     public static function run(
         string $wsUrl,
@@ -67,6 +68,7 @@ final class EdgeAgent
         callable $stderr,
         bool $verbose = false,
         ?TunnelRewriteOptions $rewriteOptions = null,
+        ?string $publicTunnelHostForRewrite = null,
     ): EdgeAgentResult {
         $v = function (string $m) use ($verbose, $stderr): void {
             if ($verbose) {
@@ -81,7 +83,7 @@ final class EdgeAgent
 
         $rewriteOpts = $rewriteOptions ?? TunnelRewriteOptions::fromEnvironment();
 
-        async(function () use ($wsUrl, $tunnelId, $agentToken, $localHost, $localPort, $apiClient, $heartbeatTunnelId, $stderr, $v, $verbose, $box, $rewriteOpts): void {
+        async(function () use ($wsUrl, $tunnelId, $agentToken, $localHost, $localPort, $apiClient, $heartbeatTunnelId, $stderr, $v, $verbose, $box, $rewriteOpts, $publicTunnelHostForRewrite): void {
             $state = new class
             {
                 public bool $running = true;
@@ -300,7 +302,7 @@ final class EdgeAgent
                             $method = strtoupper((string) ($req['method'] ?? '?'));
                             $path = (string) ($req['path'] ?? '/');
                             $v('http_request #'.$msgNum.' '.$method.' '.$path.' → http://'.$localHost.':'.$localPort.$path);
-                            $handled = self::handleHttpRequest($localHost, $localPort, $req, $rewriteOpts);
+                            $handled = self::handleHttpRequest($localHost, $localPort, $req, $rewriteOpts, $publicTunnelHostForRewrite);
                             $conn->sendText(json_encode($handled['response'], JSON_THROW_ON_ERROR));
                             $v('http_response sent for request_id='.(string) ($req['request_id'] ?? ''));
                             if (($handled['sample'] ?? null) !== null && getenv('JETTY_SHARE_CAPTURE_SAMPLES') !== '0') {
@@ -380,7 +382,7 @@ final class EdgeAgent
      * @param  array<string, mixed>  $req
      * @return array{response: array<string, mixed>, sample: array<string, mixed>|null}
      */
-    private static function handleHttpRequest(string $localHost, int $localPort, array $req, TunnelRewriteOptions $rewriteOptions): array
+    private static function handleHttpRequest(string $localHost, int $localPort, array $req, TunnelRewriteOptions $rewriteOptions, ?string $publicTunnelHostForRewrite = null): array
     {
         self::markHttpActivity();
 
@@ -458,9 +460,10 @@ final class EdgeAgent
 
         $outHeaders = self::parseResponseHeaders($headerBlock);
         $lookup = TunnelResponseRewriter::tunnelRewriteHostLookup($localHost);
-        TunnelResponseRewriter::debugRewriteRequestContext($requestId, $method, $path, $localHost, $localPort, $headers);
-        $outHeaders = TunnelResponseRewriter::rewriteRedirectHeaders($outHeaders, $headers, $lookup);
-        $respBody = TunnelResponseRewriter::maybeRewriteBody($respBody, $outHeaders, $headers, $localHost, $rewriteOptions);
+        $rewriteRequestHeaders = TunnelResponseRewriter::requestHeadersWithRewriteTunnelHostFallback($headers, $publicTunnelHostForRewrite);
+        TunnelResponseRewriter::debugRewriteRequestContext($requestId, $method, $path, $localHost, $localPort, $rewriteRequestHeaders);
+        $outHeaders = TunnelResponseRewriter::rewriteRedirectHeaders($outHeaders, $rewriteRequestHeaders, $lookup);
+        $respBody = TunnelResponseRewriter::maybeRewriteBody($respBody, $outHeaders, $rewriteRequestHeaders, $localHost, $rewriteOptions);
 
         return [
             'response' => [

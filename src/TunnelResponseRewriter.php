@@ -513,6 +513,30 @@ final class TunnelResponseRewriter
     /**
      * @param  array<string, string>  $requestHeaders
      */
+    /**
+     * When the edge omits the Host header on http_request frames, redirect/body rewrite cannot infer the public
+     * tunnel hostname. The CLI passes the host from Bridge public_url as $fallbackTunnelHost.
+     *
+     * @param  array<string, string>  $requestHeaders
+     * @return array<string, string>
+     */
+    public static function requestHeadersWithRewriteTunnelHostFallback(array $requestHeaders, ?string $fallbackTunnelHost): array
+    {
+        if ($fallbackTunnelHost === null || $fallbackTunnelHost === '') {
+            return $requestHeaders;
+        }
+        if (self::requestHostLower($requestHeaders) !== '') {
+            return $requestHeaders;
+        }
+        if (self::debugRewriteEnabled()) {
+            self::debugRewriteLine('request Host missing on edge frame; using public tunnel host from Bridge: '.$fallbackTunnelHost);
+        }
+        $out = $requestHeaders;
+        $out['Host'] = $fallbackTunnelHost;
+
+        return $out;
+    }
+
     private static function requestHostLower(array $requestHeaders): string
     {
         foreach ($requestHeaders as $k => $v) {
