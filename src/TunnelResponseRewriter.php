@@ -191,7 +191,7 @@ final class TunnelResponseRewriter
     private static function rewriteHtmlDocument(string $html, array $lookup, string $tunnelHost, TunnelRewriteOptions $options): string
     {
         $prev = libxml_use_internal_errors(true);
-        $dom = new DOMDocument();
+        $dom = new DOMDocument;
         $loaded = $dom->loadHTML('<?xml encoding="UTF-8">'.$html, LIBXML_HTML_NODEFDTD);
         libxml_clear_errors();
         libxml_use_internal_errors($prev);

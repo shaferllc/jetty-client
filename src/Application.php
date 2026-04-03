@@ -552,7 +552,11 @@ final class Application
                 return 0;
             }
 
-            $this->applyPharDownload($pharPath, $localUrl, null);
+            if (! $this->applyPharDownload($pharPath, $localUrl, null)) {
+                $this->stdout('You\'re already on the latest build from JETTY_LOCAL_PHAR_URL (downloaded file matches your current PHAR).');
+
+                return 0;
+            }
             $this->stderr('Updated PHAR from JETTY_LOCAL_PHAR_URL. Run jetty version to confirm.');
             $this->emitPostUpdateConfigTip();
 
@@ -585,13 +589,23 @@ final class Application
             return 0;
         }
 
-        if ($cmp <= 0 && ! $force) {
-            $this->stdout('Already at or past latest release '.$latest['tag_name'].'. Use --force to re-download.');
+        if ($cmp < 0 && ! $force) {
+            $this->stdout('This PHAR ('.ApiClient::VERSION.') is newer than the latest GitHub release '.$latest['tag_name'].'. No update needed. Use --force to reinstall from GitHub.');
 
             return 0;
         }
 
-        $this->applyPharDownload($pharPath, $latest['browser_download_url'], $token);
+        if ($cmp === 0 && ! $force) {
+            $this->stdout('You\'re already on the latest version ('.$latest['tag_name'].' — '.$remoteSemver.'). No update needed. Use --force to re-download the PHAR.');
+
+            return 0;
+        }
+
+        if (! $this->applyPharDownload($pharPath, $latest['browser_download_url'], $token)) {
+            $this->stdout('You\'re already on the latest version (downloaded file matches your current PHAR).');
+
+            return 0;
+        }
 
         $this->stderr('Updated PHAR to '.$latest['tag_name'].' ('.$remoteSemver.'). Run jetty version to confirm.');
         $this->emitPostUpdateConfigTip();
@@ -616,7 +630,10 @@ final class Application
         return $u;
     }
 
-    private function applyPharDownload(string $pharPath, string $url, ?string $githubToken): void
+    /**
+     * @return bool true if the on-disk PHAR was replaced; false if the download was byte-identical to the existing file
+     */
+    private function applyPharDownload(string $pharPath, string $url, ?string $githubToken): bool
     {
         $tmp = $pharPath.'.download.'.uniqid('', true);
         try {
@@ -631,6 +648,16 @@ final class Application
             throw new \RuntimeException('Downloaded file looks invalid (too small).');
         }
 
+        if (is_file($pharPath) && filesize($tmp) === filesize($pharPath)) {
+            $hNew = @hash_file('sha256', $tmp);
+            $hOld = @hash_file('sha256', $pharPath);
+            if ($hNew !== false && $hOld !== false && hash_equals($hNew, $hOld)) {
+                @unlink($tmp);
+
+                return false;
+            }
+        }
+
         @chmod($tmp, 0755);
         if (! @rename($tmp, $pharPath)) {
             @unlink($tmp);
@@ -638,6 +665,8 @@ final class Application
                 'Could not replace '.$pharPath.'. Try: mv '.basename($tmp).' '.basename($pharPath).' (from the same directory), or run jetty update from a shell outside the PHAR.'
             );
         }
+
+        return true;
     }
 
     private function emitPostUpdateConfigTip(): void
@@ -680,6 +709,20 @@ final class Application
             return 0;
         }
 
+        if (! $force && ($rootPackage = InstalledVersions::getRootPackage()) && (($rootPackage['name'] ?? '') !== 'jetty/client')) {
+            $outdatedJson = self::composerCaptureStdout($root, $composer, ['outdated', 'jetty/client', '--direct', '--format=json']);
+            if (is_string($outdatedJson)) {
+                $outdatedJson = trim($outdatedJson);
+                $decoded = json_decode($outdatedJson, true);
+                if (is_array($decoded) && $decoded === []) {
+                    $pretty = InstalledVersions::getPrettyVersion('jetty/client');
+                    $this->stdout('You\'re already on the latest jetty/client for this project ('.$pretty.'). No update needed. Use --force to run composer update with --no-cache.');
+
+                    return 0;
+                }
+            }
+        }
+
         $cmd = ['update', 'jetty/client', '--no-interaction'];
         if ($force) {
             $cmd[] = '--no-cache';
@@ -697,6 +740,37 @@ final class Application
         $this->emitPostUpdateConfigTip();
 
         return 0;
+    }
+
+    /**
+     * @param  list<string>  $composerArgs
+     */
+    private static function composerCaptureStdout(string $root, string $composer, array $composerArgs): ?string
+    {
+        $nullDevice = \PHP_OS_FAMILY === 'Windows' ? 'NUL' : '/dev/null';
+        $command = array_merge([$composer], $composerArgs);
+        $proc = @proc_open(
+            $command,
+            [
+                0 => ['file', $nullDevice, 'r'],
+                1 => ['pipe', 'w'],
+                2 => ['pipe', 'w'],
+            ],
+            $pipes,
+            $root
+        );
+        if (! is_resource($proc)) {
+            return null;
+        }
+        $out = stream_get_contents($pipes[1]);
+        fclose($pipes[1]);
+        fclose($pipes[2]);
+        $exitCode = proc_close($proc);
+        if ($exitCode !== 0) {
+            return null;
+        }
+
+        return is_string($out) ? $out : null;
     }
 
     /**
