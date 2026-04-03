@@ -10,6 +10,8 @@ final class Application
 {
     private ?CliUi $cliUi = null;
 
+    private ?ShareTrafficView $trafficView = null;
+
     private function ui(): CliUi
     {
         return $this->cliUi ??= CliUi::forStdio();
@@ -1064,6 +1066,7 @@ final class Application
         $u = $this->ui();
         if (str_starts_with($m, 'Edge agent connected')) {
             $u->successLine('Connected — forwarding HTTP to local upstream.');
+            $this->printTrafficViewHint();
 
             return;
         }
@@ -1082,24 +1085,87 @@ final class Application
 
             return;
         }
-        // Traffic log lines: "  GET /path 200 12.3kB 45ms"
-        if (preg_match('/^\s+(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\s+\S+\s+(\d{3})\s/', $m, $match)) {
-            $status = (int) $match[2];
-            $colored = $m;
-            if ($status >= 500) {
-                $colored = $u->red($m);
-            } elseif ($status >= 400) {
-                $colored = $u->yellow($m);
-            } elseif ($status >= 300) {
-                $colored = $u->cyan($m);
-            } else {
-                $colored = $u->dim($m);
+        // Traffic log lines: "[category]  METHOD /path STATUS SIZE ELAPSED"
+        if (preg_match('/^\[(\w+)]\s+(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\s+(\S+)\s+(\d{3})\s/', $m, $match)) {
+            $category = $match[1];
+            $status = (int) $match[4];
+
+            $tv = $this->shareTrafficView();
+            $tv->record($category);
+
+            if (! $tv->shouldShow($category)) {
+                return;
             }
-            $u->err($colored);
+
+            // Strip the category prefix for display, add the category icon
+            $display = '  '.$tv->categoryTag($category).' '.substr($m, strlen($match[0]) - strlen($match[2].' '.$match[3].' '.$match[4].' '));
+            // Rebuild: "  ● GET  /path 200 12.3kB 45ms"
+            $line = preg_replace('/^\[\w+]\s+/', '  '.$tv->categoryTag($category).' ', $m);
+
+            if ($status >= 500) {
+                $u->err($u->red($line));
+            } elseif ($status >= 400) {
+                $u->err($u->yellow($line));
+            } elseif ($status >= 300) {
+                $u->err($u->cyan($line));
+            } elseif ($category === 'asset') {
+                $u->err($u->dim($line));
+            } else {
+                $u->err($line);
+            }
 
             return;
         }
         $u->err($m);
+    }
+
+    private function shareTrafficView(): ShareTrafficView
+    {
+        return $this->trafficView ??= new ShareTrafficView;
+    }
+
+    private function printTrafficViewHint(): void
+    {
+        $u = $this->ui();
+        $u->err('');
+        $u->err($u->dim('  Views: [a]ll  [p]ages  [s]tatic  [j]son/api  [e]rrors'));
+    }
+
+    /**
+     * Check stdin for view-switching keystrokes (non-blocking).
+     * Called from the share idle loop.
+     */
+    private function shareCheckViewSwitch(): void
+    {
+        if ($this->trafficView === null) {
+            return;
+        }
+        if (! \is_resource(STDIN)) {
+            return;
+        }
+
+        stream_set_blocking(STDIN, false);
+        $chunk = @fread(STDIN, 64);
+        stream_set_blocking(STDIN, true);
+
+        if ($chunk === false || $chunk === '') {
+            return;
+        }
+
+        $u = $this->ui();
+        $tv = $this->shareTrafficView();
+
+        for ($i = 0, $len = strlen($chunk); $i < $len; $i++) {
+            $key = $chunk[$i];
+            if ($key === "\n" || $key === "\r") {
+                continue;
+            }
+            if ($tv->handleKey($key)) {
+                $u->err('');
+                $u->err($tv->statusLine($u));
+                $u->err('');
+            }
+        }
     }
 
     /**
@@ -2721,6 +2787,25 @@ final class Application
         if ($chunk === false || $chunk === '') {
             return false;
         }
+
+        // Check for single-key view switches before buffering lines.
+        if ($this->trafficView !== null) {
+            $u = $this->ui();
+            $tv = $this->shareTrafficView();
+            $filtered = '';
+            for ($i = 0, $len = strlen($chunk); $i < $len; $i++) {
+                $key = $chunk[$i];
+                if ($key !== "\n" && $key !== "\r" && $tv->handleKey($key)) {
+                    $u->err('');
+                    $u->err($tv->statusLine($u));
+                    $u->err('');
+                } else {
+                    $filtered .= $key;
+                }
+            }
+            $chunk = $filtered;
+        }
+
         $buffer .= $chunk;
         while (($pos = strpos($buffer, "\n")) !== false) {
             $line = substr($buffer, 0, $pos);

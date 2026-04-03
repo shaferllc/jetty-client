@@ -1008,10 +1008,13 @@ final class EdgeAgent
     }
 
     /**
-     * @param  array<string, string>  $headers
+     * Format a traffic log line with an embedded category tag for filtering.
+     * Format: "[category]  METHOD /path STATUS SIZE ELAPSED"
      */
     private static function formatTrafficLine(string $method, string $path, int $status, int $bytes, ?int $startMs): string
     {
+        $view = new ShareTrafficView;
+        $category = $view->categorize($path, $status);
         $method = str_pad($method, 4);
         $pathDisplay = strlen($path) > 60 ? substr($path, 0, 57).'...' : $path;
         $size = self::humanBytes($bytes);
@@ -1021,7 +1024,8 @@ final class EdgeAgent
             $elapsed = $ms >= 1000 ? round($ms / 1000, 1).'s' : $ms.'ms';
         }
 
-        return '  '.$method.' '.$pathDisplay.' '.$status.' '.$size.($elapsed !== '' ? ' '.$elapsed : '');
+        // Embed category as a parseable prefix: "[page]  GET /path ..."
+        return '['.$category.']  '.$method.' '.$pathDisplay.' '.$status.' '.$size.($elapsed !== '' ? ' '.$elapsed : '');
     }
 
     private static function humanBytes(int $bytes): string
