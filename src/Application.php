@@ -2176,6 +2176,7 @@ final class Application
             $u->out('');
 
             $this->shareUpdateCheck();
+            $this->shareDuplicateInstallCheck();
 
             TelegramNotifier::shareStarted($telegramBase);
 
@@ -2765,6 +2766,26 @@ final class Application
     }
 
     /**
+     * Warn once during `jetty share` if multiple jetty binaries are found on the system.
+     */
+    private function shareDuplicateInstallCheck(): void
+    {
+        $installs = $this->findAllJettyInstalls();
+        // Filter out project wrappers — those are expected in dev repos.
+        $real = array_filter($installs, fn ($i) => $i['type'] !== 'project-wrapper');
+        if (count($real) <= 1) {
+            return;
+        }
+
+        $u = $this->ui();
+        $paths = array_map(fn ($i) => $i['path'].' ('.$i['type'].($i['version'] !== '' ? ', v'.$i['version'] : '').')', $real);
+        $u->warnLine('Multiple jetty installs detected — this can cause version mismatches. Run '.$u->cmd('jetty doctor').' to clean up.');
+        foreach ($paths as $p) {
+            $u->err('    '.$u->dim($p));
+        }
+    }
+
+    /**
      * CLI flags override environment for this `jetty share` run. Returns null when no CLI overrides (EdgeAgent uses env only).
      */
     private function shareTunnelRewriteOptionsFromCli(bool $noBody, bool $noJs, bool $noCss): ?TunnelRewriteOptions
@@ -3035,6 +3056,7 @@ TXT;
             ['jetty reset', 'Clear all local Jetty CLI settings'],
             ['jetty version [--install] [--check-update]', 'Show version and install kind'],
             ['jetty update | jetty global-update', 'Update PHAR and/or Composer global package'],
+            ['jetty doctor', 'Find duplicate installs, check version, clean up'],
         ]);
         $u->out('');
         $u->section('Global flags');
