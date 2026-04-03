@@ -6,7 +6,7 @@
         ""
     ],
     "chmod": "0755",
-    "compression": "GZ",
+    "compression": "NONE",
     "main": "bin/jetty",
     "output": "dist/jetty-php.phar"
 }
