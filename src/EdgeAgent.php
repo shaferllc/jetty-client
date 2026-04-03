@@ -420,11 +420,9 @@ final class EdgeAgent
             ];
         }
 
+        $upstreamHeaders = TunnelUpstreamRequestHeaders::forLocalUpstream($headers, $localHost, $localPort);
         $curlHeaders = [];
-        foreach ($headers as $k => $v) {
-            if (self::isHopHeader((string) $k)) {
-                continue;
-            }
+        foreach ($upstreamHeaders as $k => $v) {
             $curlHeaders[] = $k.': '.$v;
         }
 
