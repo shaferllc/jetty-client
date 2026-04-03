@@ -41,10 +41,8 @@ final class TunnelResponseRewriter
         array $requestHeaders,
     ): void {
         if (self::debugNdjsonLogPath() !== null) {
-            $ge = getenv('JETTY_SHARE_DEBUG_REWRITE');
             self::agentDebugNdjson('request_context', 'TunnelResponseRewriter::debugRewriteRequestContext', [
                 'request_id' => $requestId,
-                'getenv_JETTY_SHARE_DEBUG_REWRITE' => $ge === false ? '(false)' : $ge,
                 'debugRewriteEnabled' => self::debugRewriteEnabled(),
                 'method' => $method,
                 'path' => $path,
@@ -918,19 +916,6 @@ final class TunnelResponseRewriter
         $cli = getenv('JETTY_SHARE_CLI_UPSTREAM_HOSTNAME');
         self::emitDebugNdjson('rewrite.'.$segment, array_merge($data, [
             'segment' => $segment,
-            'location' => $location,
-            'cli_upstream_hostname' => is_string($cli) && trim($cli) !== '' ? trim($cli) : null,
-        ]));
-    }
-
-    /**
-     * @param  array<string, mixed>  $data
-     */
-    public static function debugSessionNdjson(string $hypothesisId, string $location, array $data): void
-    {
-        $cli = getenv('JETTY_SHARE_CLI_UPSTREAM_HOSTNAME');
-        self::emitDebugNdjson('session.'.$hypothesisId, array_merge($data, [
-            'hypothesisId' => $hypothesisId,
             'location' => $location,
             'cli_upstream_hostname' => is_string($cli) && trim($cli) !== '' ? trim($cli) : null,
         ]));
