@@ -48,6 +48,13 @@ final class EdgeAgent
     /** Unix time of last forwarded HTTP request (for idle auto-close in {@see Application::runShareHeartbeatLoop}). */
     private static ?int $httpActivityUnix = null;
 
+    /** Traffic counters — accumulated since last heartbeat flush. */
+    private static int $deltaRequests = 0;
+
+    private static int $deltaBytesIn = 0;
+
+    private static int $deltaBytesOut = 0;
+
     public static function initHttpActivity(int $unixTime): void
     {
         self::$httpActivityUnix = $unixTime;
@@ -61,6 +68,32 @@ final class EdgeAgent
     public static function lastHttpActivityUnix(): ?int
     {
         return self::$httpActivityUnix;
+    }
+
+    public static function recordTraffic(int $bytesIn, int $bytesOut): void
+    {
+        self::$deltaRequests++;
+        self::$deltaBytesIn += $bytesIn;
+        self::$deltaBytesOut += $bytesOut;
+    }
+
+    /**
+     * Return and reset accumulated traffic deltas for the next heartbeat.
+     *
+     * @return array{requests: int, bytes_in: int, bytes_out: int}
+     */
+    public static function flushTrafficDeltas(): array
+    {
+        $d = [
+            'requests' => self::$deltaRequests,
+            'bytes_in' => self::$deltaBytesIn,
+            'bytes_out' => self::$deltaBytesOut,
+        ];
+        self::$deltaRequests = 0;
+        self::$deltaBytesIn = 0;
+        self::$deltaBytesOut = 0;
+
+        return $d;
     }
 
     /**
@@ -188,10 +221,11 @@ final class EdgeAgent
                         break;
                     }
                     try {
-                        $apiClient->heartbeat($heartbeatTunnelId);
+                        $deltas = self::flushTrafficDeltas();
+                        $apiClient->heartbeat($heartbeatTunnelId, $deltas);
                         $n++;
                         if ($verbose) {
-                            $v('heartbeat #'.$n.' OK (tunnel id '.$heartbeatTunnelId.')');
+                            $v('heartbeat #'.$n.' OK (tunnel id '.$heartbeatTunnelId.') deltas: '.json_encode($deltas));
                         }
                         if ($heartbeatAgentDebug) {
                             self::agentEmit($agentDebug, 'heartbeat_ok', ['n' => $n, 'tunnel_id' => $heartbeatTunnelId]);
@@ -533,6 +567,9 @@ final class EdgeAgent
                             $v('http_response sent for request_id='.(string) ($req['request_id'] ?? ''));
                             // Always-on traffic log line
                             $stderr(self::formatTrafficLine($method, $path, $respStatus, strlen($outJson), $requestStartMs ?? null));
+                            // Accumulate traffic for the next heartbeat
+                            $reqBodyLen = strlen((string) ($req['body_b64'] ?? ''));
+                            self::recordTraffic($reqBodyLen, strlen($outJson));
                             if (($handled['sample'] ?? null) !== null && getenv('JETTY_SHARE_CAPTURE_SAMPLES') !== '0') {
                                 $sample = $handled['sample'];
                                 self::agentEmit($agentDebug, 'bridge_sample_queued', [

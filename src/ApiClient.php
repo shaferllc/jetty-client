@@ -120,9 +120,18 @@ final class ApiClient
         }
     }
 
-    public function heartbeat(int $id): void
+    /**
+     * @param  array{requests?: int, bytes_in?: int, bytes_out?: int}  $trafficDeltas
+     */
+    public function heartbeat(int $id, array $trafficDeltas = []): void
     {
-        $res = $this->request('POST', '/api/tunnels/'.$id.'/heartbeat', null);
+        $body = null;
+        $filtered = array_filter($trafficDeltas, fn ($v) => $v > 0);
+        if ($filtered !== []) {
+            $body = json_encode($filtered, JSON_THROW_ON_ERROR);
+        }
+
+        $res = $this->request('POST', '/api/tunnels/'.$id.'/heartbeat', $body);
 
         if ($res['status'] !== 200) {
             throw new \RuntimeException('heartbeat: HTTP '.$res['status'].': '.$res['body']);
