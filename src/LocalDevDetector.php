@@ -175,27 +175,51 @@ final class LocalDevDetector
             return null;
         }
 
-        // First pass: find the row whose Path column matches $startDir (or a
-        // parent of it).  Valet/Herd table rows look like:
-        //   | lookout | X | https://lookout.test | /Users/.../lookout | php@8.5 |
-        if ($startDir !== '') {
-            $dir = $startDir;
-            for ($i = 0; $i < 32; $i++) {
-                foreach ($out as $line) {
-                    if (str_contains($line, $dir)
-                        && preg_match('#https?://[^\s]+\.(?:test|localhost|wip)[^\s]*#i', $line, $m)
-                    ) {
-                        $u = rtrim($m[0], ')"\'');
+        if ($startDir === '') {
+            return null;
+        }
 
-                        return self::appUrlToUpstream($u, $sourceLabel);
-                    }
-                }
-                $parent = dirname($dir);
-                if ($parent === $dir) {
+        // Parse each pipe-delimited table row into [url, path] pairs.
+        // Valet/Herd rows look like:
+        //   | lookout | X | https://lookout.test | /Users/.../lookout | php@8.5 |
+        $rows = [];
+        foreach ($out as $line) {
+            if (! preg_match('#https?://[^\s]+\.(?:test|localhost|wip)[^\s]*#i', $line, $urlMatch)) {
+                continue;
+            }
+            $url = rtrim($urlMatch[0], ')"\'');
+            // Extract the path column — the cell after the URL cell.
+            $cells = array_map('trim', explode('|', $line));
+            $rowPath = '';
+            foreach ($cells as $idx => $cell) {
+                if (str_contains($cell, '://') && isset($cells[$idx + 1])) {
+                    $rowPath = $cells[$idx + 1];
                     break;
                 }
-                $dir = $parent;
             }
+            if ($rowPath !== '') {
+                $rows[] = ['url' => $url, 'path' => rtrim($rowPath, '/')];
+            }
+        }
+
+        // Match rows whose path is exactly $startDir or a parent of it.
+        // Prefer the deepest (most specific) path match.
+        $startDir = rtrim($startDir, '/');
+        $bestUrl = null;
+        $bestDepth = -1;
+        foreach ($rows as $row) {
+            $rp = $row['path'];
+            if ($rp === $startDir || str_starts_with($startDir, $rp.'/')) {
+                $depth = substr_count($rp, '/');
+                if ($depth > $bestDepth) {
+                    $bestDepth = $depth;
+                    $bestUrl = $row['url'];
+                }
+            }
+        }
+
+        if ($bestUrl !== null) {
+            return self::appUrlToUpstream($bestUrl, $sourceLabel);
         }
 
         return null;
