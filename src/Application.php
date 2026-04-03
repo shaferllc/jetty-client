@@ -1500,59 +1500,47 @@ final class Application
             $u->out('  '.$u->dim('Latest:   ').$u->dim('could not check (network error)'));
         }
 
-        // ── 3. Offer to clean duplicates ──
+        // ── 3. Offer to clean other installs ──
         if ($duplicates !== []) {
             $u->out('');
             $u->section('Cleanup');
 
-            $removable = array_filter($duplicates, fn ($d) => $d['type'] !== 'project-wrapper');
-            $wrappers = array_filter($duplicates, fn ($d) => $d['type'] === 'project-wrapper');
+            // Number each non-active install for selection
+            $numbered = array_values($duplicates);
+            foreach ($numbered as $i => $dup) {
+                $num = $i + 1;
+                $vLabel = $dup['version'] !== '' ? 'v'.$dup['version'] : 'unknown version';
+                $typeLabel = $dup['type'];
+                $note = '';
+                if ($typeLabel === 'project-wrapper') {
+                    $note = $u->dim(' (dev wrapper)');
+                } elseif ($typeLabel === 'composer-project') {
+                    $note = $u->dim(' (project dependency)');
+                }
+                $u->out('  '.$u->bold('['.$num.']').' '.$dup['path']);
+                $u->out('      '.$vLabel.'  '.$u->dim($typeLabel).$note);
+            }
+            $u->out('');
+            $u->errRaw('  Remove which? Enter numbers (e.g. 1,3), "all", or "none": ');
+            $answer = strtolower(trim((string) fgets(\STDIN)));
 
-            if ($wrappers !== []) {
-                foreach ($wrappers as $w) {
-                    $u->out('  '.$u->dim($w['path'].' — project dev wrapper, safe to ignore.'));
+            $toRemove = [];
+            if ($answer === 'all') {
+                $toRemove = $numbered;
+            } elseif ($answer !== '' && $answer !== 'none' && $answer !== 'n') {
+                foreach (explode(',', $answer) as $part) {
+                    $idx = (int) trim($part) - 1;
+                    if (isset($numbered[$idx])) {
+                        $toRemove[] = $numbered[$idx];
+                    }
                 }
             }
 
-            if ($removable !== []) {
-                $u->out('');
-                $u->out('  The following copies can be removed:');
-                foreach ($removable as $dup) {
-                    $u->out('    '.$u->yellow($dup['path']).'  '.$u->dim('('.$dup['type'].')'));
-                }
-                $u->out('');
-                $u->errRaw('  Remove '.count($removable).' duplicate(s)? [y/N] ');
-                $answer = trim((string) fgets(\STDIN));
-                if ($answer !== '' && strtolower($answer[0]) === 'y') {
-                    foreach ($removable as $dup) {
-                        $path = $dup['path'];
-                        if ($dup['type'] === 'composer-global') {
-                            // Remove via composer
-                            $u->out('  Removing Composer global jetty/client…');
-                            exec('composer global remove jetty/client 2>&1', $out, $code);
-                            if ($code === 0) {
-                                $u->successLine('Removed Composer global install.');
-                            } else {
-                                $u->warnLine('Composer remove failed — remove manually: composer global remove jetty/client');
-                            }
-                        } elseif (is_file($path) && is_writable($path)) {
-                            if (@unlink($path)) {
-                                $u->successLine('Removed '.$path);
-                            } else {
-                                $u->warnLine('Could not remove '.$path.' — check permissions.');
-                            }
-                        } elseif (is_link($path)) {
-                            if (@unlink($path)) {
-                                $u->successLine('Removed symlink '.$path);
-                            } else {
-                                $u->warnLine('Could not remove symlink '.$path.' — check permissions.');
-                            }
-                        } else {
-                            $u->warnLine('Cannot remove '.$path.' — remove manually.');
-                        }
-                    }
-                } else {
-                    $u->out('  Skipped.');
+            if ($toRemove === []) {
+                $u->out('  Skipped.');
+            } else {
+                foreach ($toRemove as $dup) {
+                    $this->removeJettyInstall($dup, $u);
                 }
             }
         }
@@ -1582,6 +1570,56 @@ final class Application
         $u->out('');
 
         return 0;
+    }
+
+    /**
+     * @param  array{path: string, version: string, type: string}  $install
+     */
+    private function removeJettyInstall(array $install, CliUi $u): void
+    {
+        $path = $install['path'];
+        $type = $install['type'];
+
+        if ($type === 'composer-global') {
+            $u->out('  Removing Composer global jetty/client…');
+            $out = [];
+            exec('composer global remove jetty/client 2>&1', $out, $code);
+            if ($code === 0) {
+                $u->successLine('Removed Composer global install.');
+            } else {
+                $u->warnLine('Composer remove failed — run manually: composer global remove jetty/client');
+            }
+
+            return;
+        }
+
+        if ($type === 'composer-project') {
+            // Find the project root (up from vendor/bin/jetty)
+            $projectRoot = dirname($path, 3); // vendor/bin/jetty → project root
+            $u->out('  Removing jetty/client from '.$projectRoot.'…');
+            $out = [];
+            exec('cd '.escapeshellarg($projectRoot).' && composer remove jetty/client 2>&1', $out, $code);
+            if ($code === 0) {
+                $u->successLine('Removed jetty/client from '.$projectRoot);
+            } else {
+                $u->warnLine('Composer remove failed — run manually: cd '.$projectRoot.' && composer remove jetty/client');
+            }
+
+            return;
+        }
+
+        // File or symlink removal
+        if (is_link($path) || is_file($path)) {
+            if (@unlink($path)) {
+                $u->successLine('Removed '.$path);
+            } else {
+                $u->warnLine('Could not remove '.$path.' — check permissions or run: sudo rm '.$path);
+            }
+
+            return;
+        }
+
+        $u->warnLine('Cannot remove '.$path.' — file not found or not writable.');
     }
 
     /**
@@ -1624,8 +1662,10 @@ final class Application
                 if (! isset($candidates[$key])) {
                     // Determine type
                     $type = 'unknown';
-                    if (str_contains($key, 'composer')) {
+                    if (str_contains($key, '/.composer/') || str_contains($key, '/.config/composer/')) {
                         $type = 'composer-global';
+                    } elseif (str_contains($key, '/vendor/bin/')) {
+                        $type = 'composer-project';
                     } elseif (str_contains($key, '.local/bin')) {
                         $type = 'phar';
                     } elseif (str_contains($key, 'homebrew') || str_contains($key, '/opt/')) {
@@ -1649,6 +1689,40 @@ final class Application
                     $candidates[$key]['type'] = 'project-wrapper';
                 }
             }
+        }
+
+        // Scan common project directories for vendor/bin/jetty (Composer project installs)
+        $projectRoots = [];
+        if ($home !== '') {
+            foreach (['Projects', 'Sites', 'Code', 'src', 'dev'] as $dir) {
+                $d = $home.\DIRECTORY_SEPARATOR.$dir;
+                if (is_dir($d)) {
+                    $projectRoots[] = $d;
+                }
+            }
+        }
+        foreach ($projectRoots as $root) {
+            $d = @opendir($root);
+            if ($d === false) {
+                continue;
+            }
+            while (($entry = readdir($d)) !== false) {
+                if ($entry === '.' || $entry === '..') {
+                    continue;
+                }
+                // Check 2 levels: ~/Projects/foo/vendor/bin/jetty and ~/Projects/Apps/foo/vendor/bin/jetty
+                foreach (['', \DIRECTORY_SEPARATOR.$entry] as $sub) {
+                    $vendorBin = $root.\DIRECTORY_SEPARATOR.$entry.$sub.\DIRECTORY_SEPARATOR.'vendor'.\DIRECTORY_SEPARATOR.'bin'.\DIRECTORY_SEPARATOR.'jetty';
+                    if (is_file($vendorBin) || is_link($vendorBin)) {
+                        $rp = realpath($vendorBin);
+                        $key = $rp !== false ? $rp : $vendorBin;
+                        if (! isset($candidates[$key])) {
+                            $candidates[$key] = ['path' => $rp !== false ? $rp : $vendorBin, 'type' => 'composer-project'];
+                        }
+                    }
+                }
+            }
+            closedir($d);
         }
 
         // Resolve versions
