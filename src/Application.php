@@ -1433,6 +1433,10 @@ final class Application
         $healthPath = null;
 
         $shareFile = Config::readProjectShareOverrides();
+        $shareDebugAgent = filter_var($shareFile['debug_agent'] ?? false, FILTER_VALIDATE_BOOLEAN);
+        if (EdgeAgentDebug::enabledFromEnvironment()) {
+            $shareDebugAgent = true;
+        }
         $skipEdge = filter_var($shareFile['skip_edge'] ?? false, FILTER_VALIDATE_BOOLEAN);
         $noBodyRewrite = filter_var($shareFile['no_body_rewrite'] ?? false, FILTER_VALIDATE_BOOLEAN);
         $noJsRewrite = filter_var($shareFile['no_js_rewrite'] ?? false, FILTER_VALIDATE_BOOLEAN);
@@ -1463,6 +1467,11 @@ final class Application
             }
             if ($arg === '--verbose' || $arg === '-v' || $arg === '--errors') {
                 $shareVerbose = true;
+
+                continue;
+            }
+            if ($arg === '--debug-agent') {
+                $shareDebugAgent = true;
 
                 continue;
             }
@@ -1814,6 +1823,16 @@ final class Application
             $edgeOutcome = null;
             $edgeFailDetail = null;
             $shareRewriteOptions = $this->shareTunnelRewriteOptionsFromCli($noBodyRewrite, $noJsRewrite, $noCssRewrite);
+            $agentDebug = $shareDebugAgent
+                ? EdgeAgentDebug::stderrJsonSink([
+                    'tunnel_id' => $id,
+                    'local_upstream' => $localHost.':'.$port,
+                    'public_tunnel_host' => $curlHost,
+                ])
+                : null;
+            if ($shareDebugAgent) {
+                $this->stderr("Agent debug: structured JSON lines on stderr (prefix [jetty:agent-debug]).\n");
+            }
             if (! $printUrlOnly && ! $skipEdge && $ws !== '' && $agentToken !== '') {
                 try {
                     $edgeOutcome = EdgeAgent::run(
@@ -1828,6 +1847,7 @@ final class Application
                         $shareVerbose,
                         $shareRewriteOptions,
                         $curlHost,
+                        $agentDebug,
                     );
                 } catch (\Throwable $e) {
                     $edgeFailDetail = $e->getMessage();
@@ -2245,7 +2265,7 @@ final class Application
 
     private function shareUsageSummary(): string
     {
-        return 'Usage: jetty share [port] [--host=127.0.0.1] [--server=us-west-1] [--site=HOST] [--subdomain=label] [--print-url-only] [--skip-edge] [--serve[=DIR]] [--no-detect] [--no-resume] [--health-path=PATH] [--no-health-check] [--delete-on-exit] [--no-body-rewrite] [--no-js-rewrite] [--no-css-rewrite] [--verbose|-v|--errors] (alias: http)';
+        return 'Usage: jetty share [port] [--host=127.0.0.1] [--server=us-west-1] [--site=HOST] [--subdomain=label] [--print-url-only] [--skip-edge] [--serve[=DIR]] [--no-detect] [--no-resume] [--health-path=PATH] [--no-health-check] [--delete-on-exit] [--no-body-rewrite] [--no-js-rewrite] [--no-css-rewrite] [--verbose|-v|--errors] [--debug-agent] (alias: http)';
     }
 
     private function shareUsageHelp(): string
@@ -2267,6 +2287,7 @@ final class Application
   --delete-on-exit  Exit: call DELETE /api/tunnels (default: leave tunnel registered — remove in the web app or `jetty delete`). Env: JETTY_SHARE_DELETE_ON_EXIT=1
   --no-delete-on-exit  Force no delete on exit (overrides env).
   --verbose / -v / --errors  Log connection steps, heartbeats, and edge WebSocket frames (stderr).
+  --debug-agent  Structured agent diagnostics as JSON lines on stderr (prefix [jetty:agent-debug]); also JETTY_SHARE_DEBUG_AGENT=1 or jetty.config.json share.debug_agent. Heartbeat lines: JETTY_SHARE_DEBUG_AGENT_HEARTBEATS=1.
 
 TXT;
     }
@@ -2587,7 +2608,7 @@ Commands:
   jetty domains [--json]   Reserved subdomain labels for your team (from Domains in the app)
   jetty delete <id>
   jetty config set|get|clear|wizard ...
-  jetty share [port] [--host=127.0.0.1] [--server=us-west-1] [--site=HOST] [--subdomain=label] [--print-url-only] [--skip-edge] [--serve[=DIR]] [--no-detect] [--no-resume] [--delete-on-exit] [--no-body-rewrite] [--no-js-rewrite] [--no-css-rewrite] [--verbose|-v|--errors]
+  jetty share [port] [--host=127.0.0.1] [--server=us-west-1] [--site=HOST] [--subdomain=label] [--print-url-only] [--skip-edge] [--serve[=DIR]] [--no-detect] [--no-resume] [--delete-on-exit] [--no-body-rewrite] [--no-js-rewrite] [--no-css-rewrite] [--verbose|-v|--errors] [--debug-agent]
     (alias: http)  Auto-detect local dev upstream from cwd (see jetty help --advanced), or --serve for a static PHP server
     --server= tunnel/edge id; default from config.  --site= / --host= upstream host (default 127.0.0.1)
 
@@ -2638,6 +2659,8 @@ TXT;
   JETTY_REPLAY_ALLOW_UNSAFE=1     jetty replay: allow non-GET methods (can duplicate side effects)
   JETTY_SHARE_NO_LOCATION_REWRITE=1  jetty share: do not rewrite Location / X-Inertia-Location / Refresh to the tunnel host
   JETTY_SHARE_DEBUG_REWRITE=1   jetty share: log tunnel URL rewrite decisions to stderr (see README)
+  JETTY_SHARE_DEBUG_AGENT=1     jetty share: structured agent events on stderr (lines prefixed [jetty:agent-debug]; JSON per line)
+  JETTY_SHARE_DEBUG_AGENT_HEARTBEATS=1  With DEBUG_AGENT: also emit heartbeat_ok / heartbeat_error every Bridge heartbeat
   JETTY_SHARE_REWRITE_HOSTS=h1,h2  Extra canonical hosts to rewrite (comma-separated), beyond upstream + APP_URL discovery
   JETTY_SHARE_NO_BODY_REWRITE=1   Disable HTML/CSS/JS body URL rewriting (default: body rewrite on)
   JETTY_SHARE_BODY_REWRITE=0      Same as NO_BODY_REWRITE
