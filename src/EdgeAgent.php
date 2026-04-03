@@ -855,6 +855,9 @@ final class EdgeAgent
             $viteHits = TunnelResponseRewriter::detectViteDevServerUrls($bodyBeforeTunnelRewrite, $lookup, $localPort);
             $effectiveTunnelHost = self::headerValueCi($rewriteRequestHeaders, 'Host') ?? $publicTunnelHostForRewrite;
             TunnelResponseRewriter::emitViteDevServerWarning($viteHits, $requestId, $localHost, $localPort, $effectiveTunnelHost);
+            if ($viteHits !== []) {
+                $respBody = TunnelResponseRewriter::injectViteDevServerBanner($respBody, $viteHits, $localHost, $localPort);
+            }
         }
 
         $contentType = self::headerValueCi($outHeaders, 'Content-Type') ?? '';

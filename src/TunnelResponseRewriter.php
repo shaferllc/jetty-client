@@ -1093,6 +1093,93 @@ final class TunnelResponseRewriter
     }
 
     /**
+     * Inject a visible banner into an HTML response explaining that Vite dev-server assets
+     * cannot load through the tunnel.  Appended just before {@code </body>}.
+     *
+     * @param  list<array{url: string, host: string, port: int, vite_hint: bool}>  $hits
+     */
+    public static function injectViteDevServerBanner(string $html, array $hits, string $localHost, int $localPort): string
+    {
+        $ports = implode(', ', array_unique(array_column($hits, 'port')));
+        $isVite = (bool) array_filter(array_column($hits, 'vite_hint'));
+        $label = $isVite ? 'Vite dev server' : 'Dev server';
+
+        $urlListHtml = '';
+        foreach ($hits as $hit) {
+            $urlListHtml .= '<li><code>'.htmlspecialchars($hit['url'], ENT_QUOTES, 'UTF-8').'</code></li>';
+        }
+
+        $fixHtml = $isVite
+            ? '<p style="margin:8px 0 0"><strong>To fix:</strong> stop <code>npm run dev</code> and run:</p>'
+              .'<pre style="background:#1a1a2e;padding:8px 12px;border-radius:4px;margin:6px 0 0;font-size:13px;color:#e0e0e0">npm run build</pre>'
+              .'<p style="margin:6px 0 0;font-size:12px;color:#94a3b8">Then reload this page.</p>'
+            : '<p style="margin:8px 0 0"><strong>To fix:</strong> build assets for production so they are served on port '.$localPort.'.</p>';
+
+        $banner = <<<HTML
+<!-- [jetty share] Vite dev-server warning banner -->
+<div id="jetty-vite-banner" style="position:fixed;bottom:0;left:0;right:0;z-index:2147483647;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;font-size:14px;line-height:1.5;color:#f1f5f9;background:linear-gradient(135deg,#1e1b4b 0%,#312e81 100%);border-top:3px solid #f59e0b;padding:16px 20px;box-shadow:0 -4px 20px rgba(0,0,0,0.4)">
+  <div style="max-width:720px;margin:0 auto">
+    <div style="display:flex;align-items:flex-start;gap:12px">
+      <span style="font-size:22px;line-height:1;flex-shrink:0">⚠️</span>
+      <div style="flex:1;min-width:0">
+        <p style="margin:0;font-weight:600;font-size:15px">{$label} detected on port(s) {$ports} — assets will not load through this tunnel</p>
+        <p style="margin:6px 0 0;font-size:13px;color:#cbd5e1">The tunnel forwards to <code style="background:rgba(255,255,255,0.1);padding:1px 5px;border-radius:3px;font-size:12px">{$localHost}:{$localPort}</code> only. {$label} on port(s) {$ports} is not reachable from this public URL, so CSS and JS cannot be fetched.</p>
+        <details style="margin:8px 0 0;font-size:12px;color:#94a3b8"><summary style="cursor:pointer;color:#a5b4fc">Unreachable URLs</summary><ul style="margin:4px 0 0;padding-left:20px">{$urlListHtml}</ul></details>
+        {$fixHtml}
+      </div>
+      <button onclick="this.parentElement.parentElement.parentElement.remove()" style="background:none;border:none;color:#94a3b8;font-size:20px;cursor:pointer;padding:0 4px;line-height:1;flex-shrink:0" title="Dismiss">×</button>
+    </div>
+  </div>
+</div>
+HTML;
+
+        // Inject before </body> if present, otherwise append.
+        $pos = stripos($html, '</body>');
+        if ($pos !== false) {
+            return substr($html, 0, $pos).$banner.substr($html, $pos);
+        }
+
+        return $html.$banner;
+    }
+
+    /**
+     * Run {@code npm run build} in the given project directory to compile assets.
+     * Returns true on success, false on failure.
+     */
+    public static function runNpmBuild(string $projectDir): bool
+    {
+        $hotFile = rtrim($projectDir, '/').'/public/hot';
+        $packageJson = rtrim($projectDir, '/').'/package.json';
+
+        if (! is_file($packageJson)) {
+            return false;
+        }
+
+        // Remove the hot file first so Vite/Laravel stops using the dev server.
+        if (is_file($hotFile)) {
+            @unlink($hotFile);
+        }
+
+        $cmd = 'cd '.escapeshellarg($projectDir).' && npm run build 2>&1';
+        $output = [];
+        $exitCode = 0;
+        exec($cmd, $output, $exitCode);
+
+        if ($exitCode !== 0) {
+            $msg = '[jetty share] npm run build failed (exit '.$exitCode."):\n  ".implode("\n  ", array_slice($output, -10))."\n";
+            if (\defined('STDERR') && \is_resource(STDERR)) {
+                @fwrite(STDERR, $msg);
+            } else {
+                error_log(rtrim($msg));
+            }
+
+            return false;
+        }
+
+        return true;
+    }
+
+    /**
      * @internal PHPUnit / deterministic tests only
      */
     public static function resetWalkUpAdjacentAppUrlCacheForTesting(): void

@@ -1934,12 +1934,30 @@ final class Application
             if ($hotFile !== null) {
                 $hotContents = @file_get_contents($hotFile);
                 $hotUrl = is_string($hotContents) ? trim($hotContents) : '';
+                $hotProjectDir = dirname(dirname($hotFile)); // public/hot → project root
                 $this->ui()->warnLine(
                     'Vite dev server detected (`public/hot` file exists'
                     .($hotUrl !== '' ? ': '.$hotUrl : '')
                     .'). Assets served by Vite (CSS, JS) run on a separate port that is NOT tunnelled — the page will likely appear blank or unstyled through the tunnel.'
                 );
-                $this->stderr('  To fix: stop `npm run dev`, run `npm run build`, then restart `jetty share`.');
+                // Offer to run npm run build automatically.
+                $hasPackageJson = is_file(rtrim($hotProjectDir, '/').'/package.json');
+                if ($hasPackageJson && ! ($printUrlOnly ?? false)) {
+                    $this->stderr('  Run `npm run build` now to compile assets? [Y/n] ');
+                    $answer = trim((string) fgets(\STDIN));
+                    if ($answer === '' || strtolower($answer[0]) === 'y') {
+                        $this->stderr('  Building assets…');
+                        if (TunnelResponseRewriter::runNpmBuild($hotProjectDir)) {
+                            $this->ui()->successLine('Assets built successfully. The tunnel will serve compiled assets.');
+                        } else {
+                            $this->ui()->warnLine('Build failed — the page may still appear blank. Try running `npm run build` manually.');
+                        }
+                    } else {
+                        $this->stderr('  Skipped. To fix manually: stop `npm run dev`, run `npm run build`, then reload the tunnel URL.');
+                    }
+                } else {
+                    $this->stderr('  To fix: stop `npm run dev`, run `npm run build`, then restart `jetty share`.');
+                }
                 $this->stderr('');
             }
             if (! $printUrlOnly && ! $skipEdge && $ws !== '' && $agentToken !== '') {
