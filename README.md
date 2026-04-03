@@ -72,6 +72,10 @@ Disable without removing credentials: **`JETTY_TELEGRAM_ENABLED=0`**.
 
 On the **Jetty Bridge** (this app’s Laravel API), the same env vars apply; set **`JETTY_TELEGRAM_BRIDGE=true`** to also notify on **`POST /api/tunnels`** (created) and **`DELETE /api/tunnels/{id}`** (deleted). Bridge notifications stay off by default so shared staging apps do not ping your bot until you opt in.
 
+### Tunnel redirects (Laravel / `APP_URL`)
+
+If your local app redirects to its canonical host (e.g. **`https://beacon.test`** from **`APP_URL`**), the edge agent rewrites **`Location`** (and **`X-Inertia-Location`**) when the redirect target’s host matches the **upstream** you’re sharing (e.g. **`beacon.test`**) so the browser stays on **`https://{label}.tunnels…`**. Disable with **`JETTY_SHARE_NO_LOCATION_REWRITE=1`** if you need the original redirect.
+
 ## Split repository
 
 This directory is intended to be the root of a **standalone Git repository** (e.g. `github.com/yourorg/jetty-client`) so you can version and tag releases independently of the main Jetty app. In the main Jetty monorepo it lives at `jetty-client/` for co-development; publish by pushing this tree to `jetty-client` and submitting **`jetty/client`** to [Packagist](https://packagist.org).

@@ -312,6 +312,7 @@ final class EdgeAgent
         $respBody = substr($response, $headerSize);
 
         $outHeaders = self::parseResponseHeaders($headerBlock);
+        $outHeaders = self::rewriteTunnelRedirectHeaders($outHeaders, $headers, $localHost);
 
         return [
             'type' => self::TYPE_HTTP_RESPONSE,
@@ -320,6 +321,75 @@ final class EdgeAgent
             'headers' => $outHeaders,
             'body_b64' => base64_encode($respBody),
         ];
+    }
+
+    /**
+     * When the local app (e.g. Laravel with APP_URL=https://beacon.test) returns redirects to the
+     * upstream hostname, rewrite Location (and Inertia) to the public tunnel host so the browser
+     * stays on https://{label}.tunnels.example.com. Opt out: JETTY_SHARE_NO_LOCATION_REWRITE=1.
+     *
+     * @param  array<string, string>  $responseHeaders
+     * @param  array<string, string>  $requestHeaders  Original browser request headers (includes Host)
+     * @return array<string, string>
+     */
+    private static function rewriteTunnelRedirectHeaders(array $responseHeaders, array $requestHeaders, string $localHost): array
+    {
+        if (getenv('JETTY_SHARE_NO_LOCATION_REWRITE') === '1') {
+            return $responseHeaders;
+        }
+
+        $publicHost = '';
+        foreach ($requestHeaders as $k => $v) {
+            if (strcasecmp((string) $k, 'Host') === 0) {
+                $publicHost = strtolower(trim((string) $v));
+                break;
+            }
+        }
+        if ($publicHost === '') {
+            return $responseHeaders;
+        }
+
+        $upstream = strtolower(trim($localHost));
+
+        foreach (['Location', 'X-Inertia-Location'] as $headerName) {
+            foreach ($responseHeaders as $name => $value) {
+                if (strcasecmp($name, $headerName) !== 0) {
+                    continue;
+                }
+                $rewritten = self::rewriteAbsoluteRedirectToTunnelHost((string) $value, $upstream, $publicHost);
+                if ($rewritten !== null) {
+                    $responseHeaders[$name] = $rewritten;
+                }
+            }
+        }
+
+        return $responseHeaders;
+    }
+
+    /**
+     * If the URL is absolute and points at the local upstream host, rewrite scheme/host to the tunnel.
+     */
+    private static function rewriteAbsoluteRedirectToTunnelHost(string $value, string $upstreamHostLower, string $tunnelHostLower): ?string
+    {
+        $value = trim($value);
+        if ($value === '' || $value[0] === '/') {
+            return null;
+        }
+
+        $parts = parse_url($value);
+        if (! is_array($parts) || ! isset($parts['host'])) {
+            return null;
+        }
+
+        if (strtolower((string) $parts['host']) !== $upstreamHostLower) {
+            return null;
+        }
+
+        $path = ($parts['path'] ?? '') === '' ? '/' : (string) $parts['path'];
+        $query = isset($parts['query']) && $parts['query'] !== '' ? '?'.$parts['query'] : '';
+        $fragment = isset($parts['fragment']) && $parts['fragment'] !== '' ? '#'.$parts['fragment'] : '';
+
+        return 'https://'.$tunnelHostLower.$path.$query.$fragment;
     }
 
     /**
