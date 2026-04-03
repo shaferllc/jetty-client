@@ -787,6 +787,10 @@ final class TunnelResponseRewriter
         if ($path === null) {
             return;
         }
+        $dir = dirname($path);
+        if ($dir !== '' && $dir !== '.' && ! is_dir($dir)) {
+            @mkdir($dir, 0775, true);
+        }
         $line = json_encode([
             'ts_ms' => (int) round(microtime(true) * 1000),
             'event' => $event,

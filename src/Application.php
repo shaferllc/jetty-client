@@ -2699,10 +2699,8 @@ TXT;
 
   jetty share — dozens of optional JETTY_SHARE_* toggles (upstream, resume, health, rewrite, body/js/css,
   edge reconnect, WebSocket ping, idle prompt, request samples, debug). Full list and defaults: jetty-client/README.md
-  Common: JETTY_SHARE_UPSTREAM=URL  JETTY_SHARE_REWRITE_HOSTS=h1,h2  JETTY_SHARE_CLI_UPSTREAM_HOSTNAME=myapp.test  JETTY_SHARE_NO_DETECT=1
+  Common: JETTY_SHARE_UPSTREAM=URL  JETTY_SHARE_REWRITE_HOSTS=h1,h2  JETTY_SHARE_NO_DETECT=1
   Debug stderr: JETTY_SHARE_DEBUG_REWRITE=1  JETTY_SHARE_DEBUG_AGENT=1
-  File NDJSON: JETTY_SHARE_DEBUG_NDJSON_FILE=/abs/path.ndjson  (event/ts_ms/rewrite_debug_rev/data; pairs with DEBUG_REWRITE)
-  Monorepo rewrite: JETTY_SHARE_NO_ADJACENT_LARAVEL_SCAN=1
   Opt out of extras: JETTY_SHARE_CAPTURE_SAMPLES=0  JETTY_SHARE_TELEMETRY=0
 
   jetty replay
@@ -2715,9 +2713,7 @@ TXT;
   JETTY_LOCAL_PHAR_URL       Force PHAR downloads from this URL (else GitHub)
   JETTY_SKIP_UPDATE_NOTICE=1 Suppress “update available” hint after commands
 
-  Bridge app (.env): see .env.example and config/jetty.php (tunnel host, edge, plans, Telegram,
-  JETTY_TUNNEL_LOCAL_HOST_ALLOWLIST, request-sample redaction, prune/degraded scheduler, …).
-  jetty-edge host: JETTY_EDGE_METRICS_ADDR / JETTY_EDGE_METRICS_TOKEN (Prometheus); deploy/systemd/README.md
+  Bridge app (.env): see .env.example and config/jetty.php (tunnel host, edge, plans, Telegram, …).
 
 TXT;
     }
