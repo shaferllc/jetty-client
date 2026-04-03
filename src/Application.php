@@ -2278,7 +2278,9 @@ final class Application
             }
             $u->out('');
 
-            $this->shareUpdateCheck();
+            if ($this->shareUpdateCheck()) {
+                return 0;
+            }
             $this->shareDuplicateInstallCheck();
 
             TelegramNotifier::shareStarted($telegramBase);
@@ -2798,7 +2800,10 @@ final class Application
      * Show an update-available notice in the tunnel info block (if a newer version exists).
      * Uses the same cached check as {@see maybePrintUpdateNotice} (at most one GitHub API call per 24h).
      */
-    private function shareUpdateCheck(): void
+    /**
+     * @return bool True if the process should exit (update was applied).
+     */
+    private function shareUpdateCheck(): bool
     {
         $u = $this->ui();
         $current = ApiClient::VERSION;
@@ -2806,7 +2811,7 @@ final class Application
         if (getenv('JETTY_SKIP_UPDATE_NOTICE') === '1') {
             $u->out('  '.$u->dim(str_pad('Version', 14)).'v'.$current);
 
-            return;
+            return false;
         }
 
         $pharPath = \Phar::running(false);
@@ -2860,12 +2865,37 @@ final class Application
 
         if ($updateAvailable && $latestTag !== '') {
             $latestSemver = GitHubPharRelease::tagToSemver($latestTag);
-            $u->out('  '.$u->dim(str_pad('Version', 14)).'v'.$current.'  '.$u->yellow('update available: v'.$latestSemver.' — run: '.$u->cmd('jetty update')));
+            $u->out('  '.$u->dim(str_pad('Version', 14)).'v'.$current.'  '.$u->yellow('update available: v'.$latestSemver));
+            $u->out('');
+
+            $canSelfUpdate = $pharPath !== '' || (class_exists(InstalledVersions::class) && InstalledVersions::isInstalled('jetty/client'));
+            if ($canSelfUpdate) {
+                $u->errRaw('  Update now? [Y/n] ');
+                $answer = trim((string) fgets(\STDIN));
+                if ($answer === '' || strtolower($answer[0]) === 'y') {
+                    $u->err('  Updating…');
+                    try {
+                        if ($pharPath !== '') {
+                            $this->updatePharInPlace([], $pharPath);
+                        } else {
+                            $this->updateComposerJettyClient([]);
+                        }
+                        $u->successLine('Updated to v'.$latestSemver.'. Run `jetty share` again to use the new version.');
+
+                        return true;
+                    } catch (\Throwable $e) {
+                        $u->warnLine('Update failed: '.$e->getMessage());
+                        $u->err('  Continuing with v'.$current.'…');
+                    }
+                }
+            }
         } elseif ($latestTag !== '') {
             $u->out('  '.$u->dim(str_pad('Version', 14)).'v'.$current.'  '.$u->green('latest'));
         } else {
             $u->out('  '.$u->dim(str_pad('Version', 14)).'v'.$current);
         }
+
+        return false;
     }
 
     /**
