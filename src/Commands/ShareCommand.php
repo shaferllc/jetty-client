@@ -929,7 +929,7 @@ final class ShareCommand
                             $ws = $fastest['url'];
                             $latencyMs = $fastest['latency_ms'] ?? 0;
                             $regionLocation = $fastest['location'] ?? $fastest['region'] ?? 'unknown';
-                            $selectedEdgeRegionLabel = $regionLocation . ' (' . $latencyMs . 'ms)';
+                            $selectedEdgeRegionLabel = $regionLocation.' ('.$latencyMs.'ms)';
                         }
                     }
                 } catch (\Throwable $e) {
@@ -937,7 +937,7 @@ final class ShareCommand
                     if ($shareVerbose) {
                         $this->shareVerboseLog(
                             true,
-                            'edge region probe failed, using default: ' . $e->getMessage(),
+                            'edge region probe failed, using default: '.$e->getMessage(),
                         );
                     }
                 }
@@ -950,7 +950,7 @@ final class ShareCommand
                 $agentToken !== ''
             ) {
                 if ($selectedEdgeRegionLabel !== null) {
-                    $this->stderr($this->ui->dim('  Connecting to ' . $selectedEdgeRegionLabel . '...'));
+                    $this->stderr($this->ui->dim('  Connecting to '.$selectedEdgeRegionLabel.'...'));
                 } else {
                     $this->stderr($this->ui->dim('  Connecting...'));
                 }

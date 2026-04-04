@@ -342,9 +342,9 @@ final class ApiClient
             // Convert wss:// to https:// for the HEAD probe.
             $probeUrl = $url;
             if (str_starts_with($probeUrl, 'wss://')) {
-                $probeUrl = 'https://' . substr($probeUrl, 6);
+                $probeUrl = 'https://'.substr($probeUrl, 6);
             } elseif (str_starts_with($probeUrl, 'ws://')) {
-                $probeUrl = 'http://' . substr($probeUrl, 5);
+                $probeUrl = 'http://'.substr($probeUrl, 5);
             }
 
             $ch = curl_init($probeUrl);
@@ -358,7 +358,7 @@ final class ApiClient
                 CURLOPT_TIMEOUT => 5,
                 CURLOPT_CONNECTTIMEOUT => 3,
                 CURLOPT_HTTPHEADER => [
-                    'User-Agent: jetty-client/' . self::VERSION,
+                    'User-Agent: jetty-client/'.self::VERSION,
                 ],
             ]);
 
