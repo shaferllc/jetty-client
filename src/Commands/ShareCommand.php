@@ -913,13 +913,47 @@ final class ShareCommand
                 }
                 $this->stderr('');
             }
+            // -- Edge region auto-routing: probe available edges and pick the fastest --
+            $selectedEdgeRegionLabel = null;
             if (
                 ! $printUrlOnly &&
                 ! $skipEdge &&
                 $ws !== '' &&
                 $agentToken !== ''
             ) {
-                $this->stderr($this->ui->dim('  Connecting…'));
+                try {
+                    $edgeRegions = $client->getEdgeRegions();
+                    if (count($edgeRegions) > 1) {
+                        $fastest = $client->selectFastestEdge($edgeRegions);
+                        if ($fastest !== null && ($fastest['url'] ?? '') !== '') {
+                            $ws = $fastest['url'];
+                            $latencyMs = $fastest['latency_ms'] ?? 0;
+                            $regionLocation = $fastest['location'] ?? $fastest['region'] ?? 'unknown';
+                            $selectedEdgeRegionLabel = $regionLocation . ' (' . $latencyMs . 'ms)';
+                        }
+                    }
+                } catch (\Throwable $e) {
+                    // Fallback: keep the default $ws from the tunnel API response.
+                    if ($shareVerbose) {
+                        $this->shareVerboseLog(
+                            true,
+                            'edge region probe failed, using default: ' . $e->getMessage(),
+                        );
+                    }
+                }
+            }
+
+            if (
+                ! $printUrlOnly &&
+                ! $skipEdge &&
+                $ws !== '' &&
+                $agentToken !== ''
+            ) {
+                if ($selectedEdgeRegionLabel !== null) {
+                    $this->stderr($this->ui->dim('  Connecting to ' . $selectedEdgeRegionLabel . '...'));
+                } else {
+                    $this->stderr($this->ui->dim('  Connecting...'));
+                }
                 try {
                     $edgeOutcome = EdgeAgent::run(
                         $ws,

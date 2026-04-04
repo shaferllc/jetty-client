@@ -297,6 +297,93 @@ final class ApiClient
     }
 
     /**
+     * Fetch available edge regions from the Bridge.
+     *
+     * @return list<array{url: string, region: string, location: string}>
+     */
+    public function getEdgeRegions(): array
+    {
+        $res = $this->request('GET', '/api/cli/edge-regions', null);
+
+        if ($res['status'] !== 200) {
+            return [];
+        }
+
+        $json = json_decode($res['body'], true, flags: JSON_THROW_ON_ERROR);
+        $edges = $json['edges'] ?? [];
+
+        return is_array($edges) ? $edges : [];
+    }
+
+    /**
+     * Probe each edge URL with a HEAD request and return the fastest one.
+     *
+     * @param  list<array{url: string, region: string, location: string}>  $edges
+     * @return array{url: string, region: string, location: string, latency_ms: int}|null
+     */
+    public function selectFastestEdge(array $edges): ?array
+    {
+        if ($edges === []) {
+            return null;
+        }
+        if (count($edges) === 1) {
+            return array_merge($edges[0], ['latency_ms' => 0]);
+        }
+
+        $best = null;
+        $bestLatency = PHP_INT_MAX;
+
+        foreach ($edges as $edge) {
+            $url = $edge['url'] ?? '';
+            if ($url === '') {
+                continue;
+            }
+
+            // Convert wss:// to https:// for the HEAD probe.
+            $probeUrl = $url;
+            if (str_starts_with($probeUrl, 'wss://')) {
+                $probeUrl = 'https://' . substr($probeUrl, 6);
+            } elseif (str_starts_with($probeUrl, 'ws://')) {
+                $probeUrl = 'http://' . substr($probeUrl, 5);
+            }
+
+            $ch = curl_init($probeUrl);
+            if ($ch === false) {
+                continue;
+            }
+
+            curl_setopt_array($ch, [
+                CURLOPT_NOBODY => true,
+                CURLOPT_RETURNTRANSFER => true,
+                CURLOPT_TIMEOUT => 5,
+                CURLOPT_CONNECTTIMEOUT => 3,
+                CURLOPT_HTTPHEADER => [
+                    'User-Agent: jetty-client/' . self::VERSION,
+                ],
+            ]);
+
+            $startMs = (int) (microtime(true) * 1000);
+            curl_exec($ch);
+            $endMs = (int) (microtime(true) * 1000);
+            $errno = curl_errno($ch);
+            curl_close($ch);
+
+            // Accept even non-200 responses -- we only care about TCP/TLS latency.
+            if ($errno !== 0) {
+                continue;
+            }
+
+            $latency = $endMs - $startMs;
+            if ($latency < $bestLatency) {
+                $bestLatency = $latency;
+                $best = array_merge($edge, ['latency_ms' => $latency]);
+            }
+        }
+
+        return $best;
+    }
+
+    /**
      * Anonymous telemetry when the edge WebSocket handshake fails (e.g. nginx 502). Fire-and-forget; never throws.
      * Opt out with JETTY_SHARE_TELEMETRY=0.
      */
