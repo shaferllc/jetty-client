@@ -89,7 +89,7 @@ final class HelpRenderer
         $u->section('Configuration');
         $u->commandGrid([
             [
-                'jetty config set|get|clear|wizard ...',
+                'jetty config set|get|clear|wizard …',
                 'Persist settings (~/.config/jetty/config.json)',
             ],
             ['jetty logout', 'Clear saved token only'],

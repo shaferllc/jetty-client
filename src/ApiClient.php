@@ -257,7 +257,7 @@ final class ApiClient
     /**
      * @return array{status: int, body: string}
      */
-    private function request(string $method, string $path, ?string $body): array
+    public function request(string $method, string $path, ?string $body): array
     {
         $url = $this->baseUrl.$path;
         $ch = curl_init($url);

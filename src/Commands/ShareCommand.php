@@ -4,12 +4,14 @@ declare(strict_types=1);
 
 namespace JettyCli\Commands;
 
+use Composer\InstalledVersions;
 use JettyCli\ApiClient;
 use JettyCli\CliUi;
 use JettyCli\Config;
 use JettyCli\EdgeAgent;
 use JettyCli\EdgeAgentDebug;
 use JettyCli\EdgeAgentResult;
+use JettyCli\GitHubPharRelease;
 use JettyCli\LocalDevDetector;
 use JettyCli\LocalUpstreamUrl;
 use JettyCli\ShareIdleConfig;
@@ -20,22 +22,17 @@ use JettyCli\TunnelLock;
 use JettyCli\TunnelResponseRewriter;
 use JettyCli\TunnelResumeMatcher;
 use JettyCli\TunnelRewriteOptions;
+use JettyCli\UpdateConfig;
 
 final class ShareCommand
 {
     private ?ShareTrafficView $trafficView = null;
 
-    /**
-     * @param  \Closure(): bool  $updateCheckFn  Returns true if process should exit (update applied)
-     * @param  \Closure(): void  $duplicateInstallCheckFn
-     */
     public function __construct(
         private readonly CliUi $ui,
         private readonly ApiClient $client,
         private readonly Config $config,
         private readonly array $global,
-        private readonly \Closure $updateCheckFn,
-        private readonly \Closure $duplicateInstallCheckFn,
     ) {}
 
     public function execute(array $args): int
@@ -1558,7 +1555,146 @@ final class ShareCommand
      */
     private function shareUpdateCheck(): bool
     {
-        return ($this->updateCheckFn)();
+        $u = $this->ui;
+        $current = ApiClient::VERSION;
+        $update = new UpdateCommand($u, $this->config);
+        $help = new HelpRenderer($u);
+
+        if (UpdateConfig::isNoticeSkipped()) {
+            $u->out('  '.$u->dim(str_pad('Version', 14)).'v'.$current);
+
+            return false;
+        }
+
+        $pharPath = \Phar::running(false);
+        $canCheck = true;
+        if ($pharPath !== '' && $update->localPharUpdateUrl() !== null) {
+            $canCheck = false;
+        }
+        if (
+            $pharPath === '' &&
+            (! class_exists(InstalledVersions::class) ||
+                ! InstalledVersions::isInstalled('jetty/client'))
+        ) {
+            $canCheck = false;
+        }
+
+        $latestTag = null;
+        $updateAvailable = false;
+
+        if ($canCheck) {
+            $cachePath = $help->jettyUpdateNoticeCachePath();
+            if ($cachePath !== '') {
+                $now = time();
+                $cache = $help->readUpdateNoticeCache($cachePath);
+                $needRefresh =
+                    $cache === null ||
+                    $now - (int) ($cache['checked_at'] ?? 0) >= 86400;
+
+                // Invalidate when the cached remote version is no longer
+                // newer than the running version (e.g. user upgraded).
+                if (
+                    ! $needRefresh &&
+                    $cache !== null &&
+                    ! empty($cache['update_available'])
+                ) {
+                    $cachedRemote = (string) ($cache['remote_semver'] ?? '');
+                    if (
+                        $cachedRemote !== '' &&
+                        version_compare($cachedRemote, $current) <= 0
+                    ) {
+                        $needRefresh = true;
+                    }
+                }
+
+                if ($needRefresh) {
+                    try {
+                        $repo = $update->releasesRepo();
+                        $token = $update->githubTokenForReleases();
+                        $latest = GitHubPharRelease::latest($repo, $token);
+                        if ($latest !== null) {
+                            $remoteSemver = GitHubPharRelease::tagToSemver(
+                                $latest['tag_name'],
+                            );
+                            $cmp = version_compare($remoteSemver, $current);
+                            $cache = [
+                                'checked_at' => $now,
+                                'remote_tag' => $latest['tag_name'],
+                                'remote_semver' => $remoteSemver,
+                                'update_available' => $cmp > 0,
+                                'last_notice_at' => (int) ($cache['last_notice_at'] ?? 0),
+                                'last_notified_tag' => (string) ($cache['last_notified_tag'] ??
+                                        ''),
+                            ];
+                            $help->writeUpdateNoticeCache($cachePath, $cache);
+                        }
+                    } catch (\Throwable) {
+                        // Network error — show version without latest info.
+                    }
+                }
+
+                if ($cache !== null) {
+                    $latestTag = (string) ($cache['remote_tag'] ?? '');
+                    $updateAvailable =
+                        (bool) ($cache['update_available'] ?? false);
+                }
+            }
+        }
+
+        if ($updateAvailable && $latestTag !== '') {
+            $latestSemver = GitHubPharRelease::tagToSemver($latestTag);
+            $u->out(
+                '  '.
+                    $u->dim(str_pad('Version', 14)).
+                    'v'.
+                    $current.
+                    '  '.
+                    $u->yellow('update available: v'.$latestSemver),
+            );
+            $u->out('');
+
+            $canSelfUpdate =
+                $pharPath !== '' ||
+                (class_exists(InstalledVersions::class) &&
+                    InstalledVersions::isInstalled('jetty/client'));
+            if ($canSelfUpdate) {
+                $u->errRaw('  Update now? [Y/n] ');
+                $answer = trim((string) fgets(\STDIN));
+                if ($answer === '' || strtolower($answer[0]) === 'y') {
+                    $u->err('  Updating…');
+                    try {
+                        if ($pharPath !== '') {
+                            $update->updatePharInPlace([], $pharPath);
+                        } else {
+                            $update->updateComposerJettyClient([]);
+                        }
+                        $u->successLine(
+                            'Updated to v'.
+                                $latestSemver.
+                                '. Run `jetty share` again to use the new version.',
+                        );
+
+                        return true;
+                    } catch (\Throwable $e) {
+                        $u->warnLine('Update failed: '.$e->getMessage());
+                        $u->err('  Continuing with v'.$current.'…');
+                    }
+                }
+            }
+        } elseif ($latestTag !== '') {
+            $u->out(
+                '  '.
+                    $u->dim(str_pad('Version', 14)).
+                    'v'.
+                    $current.
+                    '  '.
+                    $u->green('latest'),
+            );
+        } else {
+            $u->out('  '.$u->dim(str_pad('Version', 14)).'v'.$current);
+        }
+
+        return false;
     }
 
     /**
@@ -1566,7 +1702,34 @@ final class ShareCommand
      */
     private function shareDuplicateInstallCheck(): void
     {
-        ($this->duplicateInstallCheckFn)();
+        $doctor = new DoctorCommand($this->ui, $this->client, $this->config);
+        $installs = $doctor->findAllJettyInstalls();
+        // Filter out project wrappers — those are expected in dev repos.
+        $real = array_filter(
+            $installs,
+            fn ($i) => $i['type'] !== 'project-wrapper',
+        );
+        if (count($real) <= 1) {
+            return;
+        }
+
+        $u = $this->ui;
+        $paths = array_map(
+            fn ($i) => $i['path'].
+                ' ('.
+                $i['type'].
+                ($i['version'] !== '' ? ', v'.$i['version'] : '').
+                ')',
+            $real,
+        );
+        $u->warnLine(
+            'Multiple jetty installs detected — this can cause version mismatches. Run '.
+                $u->cmd('jetty doctor').
+                ' to clean up.',
+        );
+        foreach ($paths as $p) {
+            $u->err('    '.$u->dim($p));
+        }
     }
 
     /**

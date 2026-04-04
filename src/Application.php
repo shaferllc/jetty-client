@@ -13,8 +13,6 @@ final class Application
 {
     private ?CliUi $cliUi = null;
 
-    private ?ShareTrafficView $trafficView = null;
-
     private ?HelpRenderer $helpRenderer = null;
 
     private ?ConfigCommand $configCommand = null;
@@ -497,7 +495,9 @@ final class Application
 
     private function updateCommand(): Commands\UpdateCommand
     {
-        return new Commands\UpdateCommand($this->ui(), $this->resolvedConfig([]));
+        $defaults = ['api-url' => null, 'token' => null, 'config' => null, 'region' => null];
+
+        return new Commands\UpdateCommand($this->ui(), $this->resolvedConfig($defaults));
     }
 
     /**
@@ -802,135 +802,6 @@ final class Application
         return $u->dim($status);
     }
 
-    private function printEdgeAgentStderr(string $m): void
-    {
-        $u = $this->ui();
-        if (str_starts_with($m, 'Edge agent connected')) {
-            $u->successLine('Connected — forwarding HTTP to local upstream.');
-            $this->printTrafficViewHint();
-
-            return;
-        }
-        if (str_starts_with($m, 'Edge agent reconnected')) {
-            $u->successLine('Reconnected — forwarding HTTP to local upstream.');
-
-            return;
-        }
-        if (str_starts_with($m, 'edge: reconnecting')) {
-            $u->err('  '.$u->yellow('↻ '.trim($m)));
-
-            return;
-        }
-        if (str_starts_with($m, 'edge: WebSocket dropped')) {
-            $u->err('  '.$u->dim($m));
-
-            return;
-        }
-        // Traffic log lines: "[category]  METHOD /path STATUS SIZE ELAPSED"
-        if (
-            preg_match(
-                "/^\[(\w+)]\s+(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\s+(\S+)\s+(\d{3})\s/",
-                $m,
-                $match,
-            )
-        ) {
-            $category = $match[1];
-            $status = (int) $match[4];
-
-            $tv = $this->shareTrafficView();
-            $tv->record($category);
-
-            if (! $tv->shouldShow($category)) {
-                return;
-            }
-
-            // Strip the category prefix for display, add the category icon
-            $display =
-                '  '.
-                $tv->categoryTag($category).
-                ' '.
-                substr(
-                    $m,
-                    strlen($match[0]) -
-                        strlen(
-                            $match[2].' '.$match[3].' '.$match[4].' ',
-                        ),
-                );
-            // Rebuild: "  ● GET  /path 200 12.3kB 45ms"
-            $line = preg_replace(
-                "/^\[\w+]\s+/",
-                '  '.$tv->categoryTag($category).' ',
-                $m,
-            );
-
-            if ($status >= 500) {
-                $u->err($u->red($line));
-            } elseif ($status >= 400) {
-                $u->err($u->yellow($line));
-            } elseif ($status >= 300) {
-                $u->err($u->cyan($line));
-            } elseif ($category === 'asset') {
-                $u->err($u->dim($line));
-            } else {
-                $u->err($line);
-            }
-
-            return;
-        }
-        $u->err($m);
-    }
-
-    private function shareTrafficView(): ShareTrafficView
-    {
-        return $this->trafficView ??= new ShareTrafficView;
-    }
-
-    private function printTrafficViewHint(): void
-    {
-        $u = $this->ui();
-        $u->err('');
-        $u->err(
-            $u->dim('  Views: [a]ll  [p]ages  [s]tatic  [j]son/api  [e]rrors'),
-        );
-    }
-
-    /**
-     * Check stdin for view-switching keystrokes (non-blocking).
-     * Called from the share idle loop.
-     */
-    private function shareCheckViewSwitch(): void
-    {
-        if ($this->trafficView === null) {
-            return;
-        }
-        if (! \is_resource(STDIN)) {
-            return;
-        }
-
-        stream_set_blocking(STDIN, false);
-        $chunk = @fread(STDIN, 64);
-        stream_set_blocking(STDIN, true);
-
-        if ($chunk === false || $chunk === '') {
-            return;
-        }
-
-        $u = $this->ui();
-        $tv = $this->shareTrafficView();
-
-        for ($i = 0, $len = strlen($chunk); $i < $len; $i++) {
-            $key = $chunk[$i];
-            if ($key === "\n" || $key === "\r") {
-                continue;
-            }
-            if ($tv->handleKey($key)) {
-                $u->err('');
-                $u->err($tv->statusLine($u));
-                $u->err('');
-            }
-        }
-    }
-
     /**
      * @param  array{api-url: ?string, token: ?string, config: ?string, region: ?string}  $global
      * @param  list<string>  $rest
@@ -1194,7 +1065,9 @@ final class Application
 
     private function cmdDoctor(): int
     {
-        return (new Commands\DoctorCommand($this->ui(), $this->client([]), $this->resolvedConfig([])))->execute();
+        $defaults = ['api-url' => null, 'token' => null, 'config' => null, 'region' => null];
+
+        return (new Commands\DoctorCommand($this->ui(), $this->client($defaults), $this->resolvedConfig($defaults)))->execute();
     }
 
     private function cmdShare(array $global, array $args): int
@@ -1232,6 +1105,7 @@ final class Application
         $this->helpRenderer()->maybePrintUpdateNotice(
             $command,
             $exitCode,
+            fn () => $this->localPharUpdateUrl(),
             fn () => $this->releasesRepo(),
             fn () => $this->githubTokenForReleases(),
         );
@@ -1239,11 +1113,11 @@ final class Application
 
     private function stdout(string $s): void
     {
-        fwrite(\STDOUT, $s."\n");
+        fwrite(\STDOUT, $s.\PHP_EOL);
     }
 
     private function stderr(string $s): void
     {
-        fwrite(\STDERR, $s."\n");
+        fwrite(\STDERR, $s.\PHP_EOL);
     }
 }

@@ -191,9 +191,8 @@ final class DoctorCommand
         $u->out('');
         $u->section('API connectivity');
 
-        $cfg = Config::load(null);
-        $apiUrl = $cfg['api_url'] ?? null;
-        $token = $cfg['token'] ?? null;
+        $apiUrl = $this->config->apiUrl;
+        $token = $this->config->token;
 
         if (! is_string($apiUrl) || $apiUrl === '') {
             $u->warnLine('No API URL configured. Run: jetty setup');
@@ -320,7 +319,7 @@ final class DoctorCommand
      *
      * @return list<array{path: string, version: string, type: string}>
      */
-    private function findAllJettyInstalls(): array
+    public function findAllJettyInstalls(): array
     {
         $home = getenv('HOME') ?: getenv('USERPROFILE') ?: '';
         $candidates = [];
