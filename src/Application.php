@@ -2285,6 +2285,8 @@ final class Application
         $healthPath = null;
         /** @var list<array{match_type: string, path_prefix?: string, local_host: string, local_port: int, enabled: bool}> */
         $routingRules = [];
+        /** @var int|null Tunnel auto-expire in seconds */
+        $expiresInSeconds = null;
 
         $shareFile = Config::readProjectShareOverrides();
         $shareProjectRoot = $shareFile['project_root'] ?? null;
@@ -2459,6 +2461,16 @@ final class Application
                     throw new \InvalidArgumentException(
                         '--subdomain= requires a value',
                     );
+                }
+
+                continue;
+            }
+            // --expires=30m or --expires=3600 (seconds)
+            if (str_starts_with($arg, '--expires=')) {
+                $expiresRaw = substr($arg, strlen('--expires='));
+                $expiresIn = self::parseDurationToSeconds($expiresRaw);
+                if ($expiresIn !== null && $expiresIn >= 60) {
+                    $expiresInSeconds = $expiresIn;
                 }
 
                 continue;
@@ -2819,6 +2831,7 @@ final class Application
                         $subdomain,
                         $tunnelServer,
                         $routingRules !== [] ? $routingRules : null,
+                        $expiresInSeconds,
                     );
                 }
             } else {
@@ -4621,6 +4634,39 @@ final class Application
     private function stderr(string $s): void
     {
         fwrite(\STDERR, $s.\PHP_EOL);
+    }
+
+    /**
+     * Parse a human-friendly duration string into seconds.
+     * Supports: 30m, 1h, 2h30m, 3600 (plain seconds), 1d.
+     */
+    private static function parseDurationToSeconds(string $raw): ?int
+    {
+        $raw = trim($raw);
+        if ($raw === '') {
+            return null;
+        }
+
+        // Plain integer = seconds.
+        if (ctype_digit($raw)) {
+            return (int) $raw;
+        }
+
+        $total = 0;
+        if (preg_match_all('/(\d+)\s*(d|h|m|s)/i', $raw, $matches, PREG_SET_ORDER)) {
+            foreach ($matches as $m) {
+                $val = (int) $m[1];
+                $total += match (strtolower($m[2])) {
+                    'd' => $val * 86400,
+                    'h' => $val * 3600,
+                    'm' => $val * 60,
+                    's' => $val,
+                    default => 0,
+                };
+            }
+        }
+
+        return $total > 0 ? $total : null;
     }
 
     /**
