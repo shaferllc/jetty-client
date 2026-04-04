@@ -186,6 +186,23 @@ final class ApiClient
     }
 
     /**
+     * Notify Bridge of a CI/CD event for the given tunnel (fire-and-forget).
+     *
+     * @param  array<string, mixed>  $metadata  Extra context, e.g. ['pr_number' => 42]
+     */
+    public function notifyCiCd(string $tunnelId, string $event, array $metadata = []): void
+    {
+        $body = array_filter(array_merge(['event' => $event], $metadata), static fn ($v) => $v !== null);
+        $payload = json_encode($body, JSON_THROW_ON_ERROR);
+
+        try {
+            $this->request('POST', '/api/tunnels/'.$tunnelId.'/ci-notify', $payload);
+        } catch (\Throwable) {
+            // Fire-and-forget: CI/CD notification failures should not block the CLI.
+        }
+    }
+
+    /**
      * Human-readable API failure for tunnel create/attach (parses JSON {@code message} / {@code hint}).
      */
     public static function formatTunnelMutationError(string $operation, int $httpStatus, string $body): string
