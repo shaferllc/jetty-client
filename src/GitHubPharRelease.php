@@ -50,9 +50,13 @@ final class GitHubPharRelease
             return null;
         }
 
+        // Look for a matching .sha256 checksum sidecar file.
+        $checksumUrl = self::matchChecksumAsset($assets, $browserUrl);
+
         return [
             'tag_name' => $tagName,
             'browser_download_url' => $browserUrl,
+            'checksum_url' => $checksumUrl,
             'html_url' => $htmlUrl,
         ];
     }
@@ -186,6 +190,71 @@ final class GitHubPharRelease
         }
 
         return null;
+    }
+
+    /**
+     * Find a .sha256 sidecar asset matching the PHAR download URL.
+     *
+     * @param  list<array<string, mixed>>  $assets
+     */
+    private static function matchChecksumAsset(array $assets, string $pharUrl): ?string
+    {
+        // Derive expected checksum filename from PHAR URL: jetty.phar -> jetty.phar.sha256
+        $pharBasename = basename(parse_url($pharUrl, PHP_URL_PATH) ?: '');
+        if ($pharBasename === '') {
+            return null;
+        }
+        $checksumName = strtolower($pharBasename.'.sha256');
+
+        foreach ($assets as $asset) {
+            $name = isset($asset['name']) ? strtolower((string) $asset['name']) : '';
+            if ($name === $checksumName) {
+                $u = isset($asset['browser_download_url']) ? (string) $asset['browser_download_url'] : '';
+
+                return $u !== '' ? $u : null;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Download a .sha256 checksum file and verify the downloaded PHAR against it.
+     *
+     * @return bool true if checksum matches, false if no checksum available (graceful skip)
+     *
+     * @throws \RuntimeException if checksum is available but does not match
+     */
+    public static function verifyChecksum(string $filePath, ?string $checksumUrl, ?string $githubToken = null): bool
+    {
+        if ($checksumUrl === null || $checksumUrl === '') {
+            return false; // No checksum available; caller decides whether to proceed.
+        }
+
+        $checksumContent = self::httpGet($checksumUrl, $githubToken);
+        if ($checksumContent === null) {
+            return false; // Could not fetch checksum; graceful skip.
+        }
+
+        // sha256sum format: "<hash>  <filename>" or "<hash> <filename>"
+        $parts = preg_split('/\s+/', trim($checksumContent), 2);
+        $expectedHash = $parts[0] ?? '';
+        if (strlen($expectedHash) !== 64 || ! ctype_xdigit($expectedHash)) {
+            return false; // Invalid checksum format; skip.
+        }
+
+        $actualHash = @hash_file('sha256', $filePath);
+        if ($actualHash === false) {
+            throw new \RuntimeException('Could not compute SHA256 of downloaded file.');
+        }
+
+        if (! hash_equals(strtolower($expectedHash), strtolower($actualHash))) {
+            throw new \RuntimeException(
+                'PHAR checksum mismatch! Expected '.$expectedHash.' but got '.$actualHash.'. The download may be corrupted or tampered with.',
+            );
+        }
+
+        return true;
     }
 
     /**

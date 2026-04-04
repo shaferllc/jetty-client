@@ -24,7 +24,10 @@ final class ApiClient
     /**
      * @return array<string, mixed>
      */
-    public function createTunnel(string $localHost, int $localPort, ?string $subdomain = null, ?string $tunnelServer = null): array
+    /**
+     * @param  list<array{match_type: string, path_prefix?: string, header_name?: string, header_value?: string, local_host: string, local_port: int, enabled: bool}>|null  $routingRules
+     */
+    public function createTunnel(string $localHost, int $localPort, ?string $subdomain = null, ?string $tunnelServer = null, ?array $routingRules = null): array
     {
         $body = ['local_host' => $localHost, 'local_port' => $localPort];
         if ($subdomain !== null && trim($subdomain) !== '') {
@@ -32,6 +35,9 @@ final class ApiClient
         }
         if ($tunnelServer !== null && trim($tunnelServer) !== '') {
             $body['server'] = trim($tunnelServer);
+        }
+        if ($routingRules !== null && $routingRules !== []) {
+            $body['routing_rules'] = $routingRules;
         }
         $payload = json_encode($body, JSON_THROW_ON_ERROR);
         $res = $this->request('POST', '/api/tunnels', $payload);

@@ -581,6 +581,7 @@ final class Application
                 $pharPath,
                 $latest['browser_download_url'],
                 $token,
+                $latest['checksum_url'] ?? null,
             )
         ) {
             $this->stdout(
@@ -625,6 +626,7 @@ final class Application
         string $pharPath,
         string $url,
         ?string $githubToken,
+        ?string $checksumUrl = null,
     ): bool {
         $tmp = $pharPath.'.download.'.uniqid('', true);
         try {
@@ -639,6 +641,17 @@ final class Application
             throw new \RuntimeException(
                 'Downloaded file looks invalid (too small).',
             );
+        }
+
+        // Verify SHA256 checksum if a sidecar file is available.
+        try {
+            $verified = GitHubPharRelease::verifyChecksum($tmp, $checksumUrl, $githubToken);
+            if ($verified) {
+                $this->stderr('  Checksum verified (SHA256).');
+            }
+        } catch (\RuntimeException $e) {
+            @unlink($tmp);
+            throw $e;
         }
 
         if (is_file($pharPath) && filesize($tmp) === filesize($pharPath)) {
@@ -2270,6 +2283,8 @@ final class Application
         $forceShare = false;
         $noHealthCheck = false;
         $healthPath = null;
+        /** @var list<array{match_type: string, path_prefix?: string, local_host: string, local_port: int, enabled: bool}> */
+        $routingRules = [];
 
         $shareFile = Config::readProjectShareOverrides();
         $shareProjectRoot = $shareFile['project_root'] ?? null;
@@ -2448,6 +2463,26 @@ final class Application
 
                 continue;
             }
+            // --route /api=8080 or --route /api=api-server:8080
+            if (str_starts_with($arg, '--route=')) {
+                $routeSpec = substr($arg, strlen('--route='));
+                $parsed = self::parseRouteFlag($routeSpec);
+                if ($parsed !== null) {
+                    $routingRules[] = $parsed;
+                }
+
+                continue;
+            }
+            // --routes-file=path/to/routes.json
+            if (str_starts_with($arg, '--routes-file=')) {
+                $routesFile = substr($arg, strlen('--routes-file='));
+                $loadedRules = self::loadRoutesFile($routesFile);
+                if ($loadedRules !== []) {
+                    $routingRules = array_merge($routingRules, $loadedRules);
+                }
+
+                continue;
+            }
             if ($arg === '--print-url-only') {
                 $printUrlOnly = true;
 
@@ -2542,6 +2577,15 @@ final class Application
             throw new \InvalidArgumentException(
                 '--serve cannot be combined with --print-url-only.',
             );
+        }
+
+        // Auto-load .jetty/routes.json if present and no --route flags were given.
+        if ($routingRules === []) {
+            $cwd = getcwd();
+            if ($cwd !== false) {
+                $autoRoutesPath = $cwd.'/.jetty/routes.json';
+                $routingRules = self::loadRoutesFile($autoRoutesPath);
+            }
         }
 
         $builtInServerProc = null;
@@ -2774,6 +2818,7 @@ final class Application
                         $port,
                         $subdomain,
                         $tunnelServer,
+                        $routingRules !== [] ? $routingRules : null,
                     );
                 }
             } else {
@@ -4576,5 +4621,87 @@ final class Application
     private function stderr(string $s): void
     {
         fwrite(\STDERR, $s.\PHP_EOL);
+    }
+
+    /**
+     * Parse --route=/api=8080 or --route=/api=api-server:8080 into a routing rule.
+     *
+     * @return array{match_type: string, path_prefix: string, local_host: string, local_port: int, enabled: bool}|null
+     */
+    private static function parseRouteFlag(string $spec): ?array
+    {
+        // Format: /path=port or /path=host:port
+        $parts = explode('=', $spec, 2);
+        if (count($parts) !== 2 || $parts[0] === '' || $parts[1] === '') {
+            return null;
+        }
+
+        $pathPrefix = $parts[0];
+        $target = $parts[1];
+
+        if (str_contains($target, ':')) {
+            $hostPort = explode(':', $target, 2);
+            $host = $hostPort[0];
+            $port = (int) $hostPort[1];
+        } else {
+            $host = '127.0.0.1';
+            $port = (int) $target;
+        }
+
+        if ($port <= 0 || $port > 65535) {
+            return null;
+        }
+
+        return [
+            'match_type' => 'path_prefix',
+            'path_prefix' => $pathPrefix,
+            'local_host' => $host,
+            'local_port' => $port,
+            'enabled' => true,
+        ];
+    }
+
+    /**
+     * Load routing rules from a JSON file (e.g. .jetty/routes.json).
+     *
+     * @return list<array{match_type: string, path_prefix?: string, header_name?: string, header_value?: string, local_host: string, local_port: int, enabled: bool}>
+     */
+    private static function loadRoutesFile(string $path): array
+    {
+        if (! is_file($path)) {
+            return [];
+        }
+
+        $content = @file_get_contents($path);
+        if ($content === false) {
+            return [];
+        }
+
+        try {
+            $data = json_decode($content, true, 512, \JSON_THROW_ON_ERROR);
+        } catch (\JsonException) {
+            return [];
+        }
+
+        if (! is_array($data)) {
+            return [];
+        }
+
+        // Support both {"rules": [...]} and bare [...]
+        $rules = isset($data['rules']) && is_array($data['rules']) ? $data['rules'] : $data;
+
+        $result = [];
+        foreach ($rules as $rule) {
+            if (! is_array($rule)) {
+                continue;
+            }
+            if (! isset($rule['match_type'], $rule['local_host'], $rule['local_port'])) {
+                continue;
+            }
+            $rule['enabled'] = $rule['enabled'] ?? true;
+            $result[] = $rule;
+        }
+
+        return $result;
     }
 }
