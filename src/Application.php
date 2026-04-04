@@ -81,7 +81,13 @@ final class Application
 
             return $code;
         } catch (\Throwable $e) {
-            $this->ui()->errorLine($e->getMessage());
+            $diag = CliDiagnostics::diagnose($e);
+            if ($diag !== null) {
+                $this->ui()->errorLine($diag['error']);
+                $this->stderr(CliDiagnostics::format($diag));
+            } else {
+                $this->ui()->errorLine($e->getMessage());
+            }
 
             return 1;
         }
@@ -1980,6 +1986,60 @@ final class Application
                     $primaryDir.
                         ' is not in PATH — add it to your shell profile.',
                 );
+            }
+        }
+
+        // ── 5. API connectivity ──
+        $u->out('');
+        $u->section('API connectivity');
+
+        $cfg = Config::load(null);
+        $apiUrl = $cfg['api_url'] ?? null;
+        $token = $cfg['token'] ?? null;
+
+        if (! is_string($apiUrl) || $apiUrl === '') {
+            $u->warnLine('No API URL configured. Run: jetty setup');
+        } else {
+            $u->out('  '.$u->dim('API URL: ').$apiUrl);
+            try {
+                $client = new ApiClient($apiUrl, is_string($token) ? $token : '');
+                $bootstrap = $client->request('GET', '/api/cli/bootstrap', null);
+                if ($bootstrap['status'] === 200) {
+                    $u->successLine('API reachable (HTTP 200).');
+                } else {
+                    $u->warnLine('API returned HTTP '.$bootstrap['status'].'.');
+                }
+            } catch (\Throwable $e) {
+                $u->errorLine('API unreachable: '.$e->getMessage());
+                $diag = CliDiagnostics::diagnose($e);
+                if ($diag !== null) {
+                    foreach ($diag['suggestions'] as $s) {
+                        $u->out('    - '.$s);
+                    }
+                }
+            }
+        }
+
+        // ── 6. Auth check ──
+        $u->out('');
+        $u->section('Authentication');
+
+        if (! is_string($token) || $token === '') {
+            $u->warnLine('No auth token configured. Run: jetty login');
+        } else {
+            $u->out('  '.$u->dim('Token: ').$u->dim(substr($token, 0, 8).'...'));
+            try {
+                $client = new ApiClient(is_string($apiUrl) ? $apiUrl : '', $token);
+                $res = $client->request('GET', '/api/tunnels', null);
+                if ($res['status'] === 200) {
+                    $u->successLine('Token valid (tunnel list returned HTTP 200).');
+                } elseif ($res['status'] === 401) {
+                    $u->errorLine('Token rejected (HTTP 401). Run: jetty login');
+                } else {
+                    $u->warnLine('Unexpected HTTP '.$res['status'].' when checking token.');
+                }
+            } catch (\Throwable $e) {
+                $u->warnLine('Could not verify token: '.$e->getMessage());
             }
         }
 
