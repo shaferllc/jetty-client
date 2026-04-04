@@ -33,6 +33,15 @@ final class EdgeAgent
 
     private const TYPE_HTTP_RESPONSE = 'http_response';
 
+    // TCP/UDP raw protocol types
+    private const TYPE_TCP_CONNECT = 'tcp_connect';
+
+    private const TYPE_TCP_DATA = 'tcp_data';
+
+    private const TYPE_TCP_CLOSE = 'tcp_close';
+
+    private const TYPE_UDP_DATA = 'udp_data';
+
     private const MAX_AGENT_TOKEN_REFRESH_PER_RUN = 8;
 
     /**
@@ -673,6 +682,13 @@ final class EdgeAgent
                             $raw = $msg->buffer();
                             $msgNum++;
                             $ft = self::parseType($raw);
+                            // Handle TCP/UDP raw protocol frames
+                            if ($ft === self::TYPE_TCP_CONNECT || $ft === self::TYPE_TCP_DATA || $ft === self::TYPE_TCP_CLOSE || $ft === self::TYPE_UDP_DATA) {
+                                self::handleRawProtocolFrame($ft, $raw, $wsConn, $localHost, $localPort, $agentDebug, $v);
+
+                                continue;
+                            }
+
                             if ($ft !== self::TYPE_HTTP_REQUEST) {
                                 self::agentEmit(
                                     $agentDebug,
@@ -1647,5 +1663,203 @@ final class EdgeAgent
         }
 
         return implode("\n", $lines);
+    }
+
+    // ── TCP/UDP raw protocol support ────────────────────────────────
+
+    /** @var array<string, resource> Active local TCP connections keyed by connection_id. */
+    private static array $tcpConns = [];
+
+    /**
+     * Handle a raw protocol frame from the edge (tcp_connect, tcp_data, tcp_close, udp_data).
+     */
+    private static function handleRawProtocolFrame(
+        string $type,
+        string $raw,
+        WebsocketConnection $wsConn,
+        string $localHost,
+        int $localPort,
+        bool $agentDebug,
+        \Closure $v,
+    ): void {
+        try {
+            $msg = json_decode($raw, true, 512, JSON_THROW_ON_ERROR);
+        } catch (\JsonException) {
+            return;
+        }
+
+        $connId = $msg['connection_id'] ?? '';
+
+        match ($type) {
+            self::TYPE_TCP_CONNECT => self::handleTcpConnect($connId, $localHost, $localPort, $wsConn, $v),
+            self::TYPE_TCP_DATA => self::handleTcpData($connId, $msg['data_b64'] ?? '', $wsConn, $v),
+            self::TYPE_TCP_CLOSE => self::handleTcpClose($connId, $v),
+            self::TYPE_UDP_DATA => self::handleUdpData($msg, $localHost, $localPort, $wsConn, $v),
+            default => null,
+        };
+    }
+
+    /**
+     * Open a local TCP connection when the edge signals a new inbound client.
+     */
+    private static function handleTcpConnect(
+        string $connId,
+        string $localHost,
+        int $localPort,
+        WebsocketConnection $wsConn,
+        \Closure $v,
+    ): void {
+        $v("TCP connect: {$connId} -> {$localHost}:{$localPort}");
+
+        $sock = @stream_socket_client(
+            "tcp://{$localHost}:{$localPort}",
+            $errno,
+            $errstr,
+            5,
+        );
+
+        if ($sock === false) {
+            $v("TCP connect failed: {$errstr} ({$errno})");
+            // Notify edge that we could not connect
+            $close = json_encode([
+                'type' => self::TYPE_TCP_CLOSE,
+                'connection_id' => $connId,
+                'reason' => "local connect failed: {$errstr}",
+            ]);
+            $wsConn->sendText($close);
+
+            return;
+        }
+
+        stream_set_blocking($sock, false);
+        self::$tcpConns[$connId] = $sock;
+
+        // Start async read from local socket -> edge
+        async(function () use ($connId, $sock, $wsConn) {
+            try {
+                while (isset(self::$tcpConns[$connId]) && is_resource($sock)) {
+                    $data = @fread($sock, 32768);
+                    if ($data === false || $data === '') {
+                        if (feof($sock)) {
+                            break;
+                        }
+                        delay(0.01);
+
+                        continue;
+                    }
+                    $frame = json_encode([
+                        'type' => self::TYPE_TCP_DATA,
+                        'connection_id' => $connId,
+                        'data_b64' => base64_encode($data),
+                    ]);
+                    $wsConn->sendText($frame);
+                }
+            } catch (\Throwable) {
+                // Connection dropped
+            } finally {
+                self::handleTcpClose($connId, function () {});
+                $close = json_encode([
+                    'type' => self::TYPE_TCP_CLOSE,
+                    'connection_id' => $connId,
+                    'reason' => 'local connection closed',
+                ]);
+                try {
+                    $wsConn->sendText($close);
+                } catch (\Throwable) {
+                }
+            }
+        });
+    }
+
+    /**
+     * Write data from the edge to the local TCP socket.
+     */
+    private static function handleTcpData(
+        string $connId,
+        string $dataB64,
+        WebsocketConnection $wsConn,
+        \Closure $v,
+    ): void {
+        $sock = self::$tcpConns[$connId] ?? null;
+        if ($sock === null || ! is_resource($sock)) {
+            return;
+        }
+
+        $data = base64_decode($dataB64, true);
+        if ($data === false) {
+            return;
+        }
+
+        $written = @fwrite($sock, $data);
+        if ($written === false) {
+            self::handleTcpClose($connId, $v);
+        }
+    }
+
+    /**
+     * Close a local TCP connection.
+     */
+    private static function handleTcpClose(string $connId, \Closure $v): void
+    {
+        $sock = self::$tcpConns[$connId] ?? null;
+        if ($sock !== null) {
+            if (is_resource($sock)) {
+                @fclose($sock);
+            }
+            unset(self::$tcpConns[$connId]);
+            $v("TCP close: {$connId}");
+        }
+    }
+
+    /**
+     * Handle a UDP datagram from the edge: send it to the local UDP service and relay the reply.
+     */
+    private static function handleUdpData(
+        array $msg,
+        string $localHost,
+        int $localPort,
+        WebsocketConnection $wsConn,
+        \Closure $v,
+    ): void {
+        $connId = $msg['connection_id'] ?? '';
+        $dataB64 = $msg['data_b64'] ?? '';
+        $remoteAddr = $msg['remote_addr'] ?? '';
+
+        $data = base64_decode($dataB64, true);
+        if ($data === false) {
+            return;
+        }
+
+        $v("UDP datagram: {$connId} (".strlen($data).' bytes)');
+
+        $sock = @stream_socket_client(
+            "udp://{$localHost}:{$localPort}",
+            $errno,
+            $errstr,
+            2,
+        );
+
+        if ($sock === false) {
+            $v("UDP connect failed: {$errstr}");
+
+            return;
+        }
+
+        @fwrite($sock, $data);
+
+        // Try to read a reply (with short timeout for UDP)
+        stream_set_timeout($sock, 0, 500000); // 500ms
+        $reply = @fread($sock, 65535);
+        @fclose($sock);
+
+        if ($reply !== false && $reply !== '') {
+            $frame = json_encode([
+                'type' => self::TYPE_UDP_DATA,
+                'connection_id' => $connId,
+                'remote_addr' => $remoteAddr,
+                'data_b64' => base64_encode($reply),
+            ]);
+            $wsConn->sendText($frame);
+        }
     }
 }
