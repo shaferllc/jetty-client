@@ -165,12 +165,12 @@ final class EdgeAgent
      */
     public static function run(
         string $wsUrl,
-        int $tunnelId,
+        string $tunnelId,
         string $agentToken,
         string $localHost,
         int $localPort,
         ApiClient $apiClient,
-        int $heartbeatTunnelId,
+        string $heartbeatTunnelId,
         callable $stderr,
         bool $verbose = false,
         ?TunnelRewriteOptions $rewriteOptions = null,

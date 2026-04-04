@@ -63,7 +63,7 @@ final class TunnelLockTest extends TestCase
 
     public function test_acquire_creates_lock_file(): void
     {
-        $lock = new TunnelLock(100);
+        $lock = new TunnelLock('100');
         $result = $lock->acquire();
 
         $this->assertTrue($result['acquired']);
@@ -74,14 +74,14 @@ final class TunnelLockTest extends TestCase
 
     public function test_acquire_writes_pid_to_lock_file(): void
     {
-        $lock = new TunnelLock(101);
+        $lock = new TunnelLock('101');
         $lock->acquire();
 
         $content = file_get_contents($this->lockDir().'/tunnel-101.lock');
         $data = json_decode($content, true);
 
         $this->assertSame(getmypid(), $data['pid']);
-        $this->assertSame(101, $data['tunnel_id']);
+        $this->assertSame('101', $data['tunnel_id']);
 
         $lock->release();
     }
@@ -90,7 +90,7 @@ final class TunnelLockTest extends TestCase
 
     public function test_check_returns_not_locked_when_no_lock_file(): void
     {
-        $lock = new TunnelLock(200);
+        $lock = new TunnelLock('200');
         $result = $lock->check();
 
         $this->assertFalse($result['locked']);
@@ -117,7 +117,7 @@ final class TunnelLockTest extends TestCase
             'host' => 'test',
         ]));
 
-        $lock = new TunnelLock(201);
+        $lock = new TunnelLock('201');
         $result = $lock->check();
 
         $this->assertFalse($result['locked']);
@@ -137,7 +137,7 @@ final class TunnelLockTest extends TestCase
             'host' => 'test',
         ]));
 
-        $lock = new TunnelLock(202);
+        $lock = new TunnelLock('202');
         $result = $lock->check();
 
         $this->assertFalse($result['locked']);
@@ -149,7 +149,7 @@ final class TunnelLockTest extends TestCase
 
     public function test_release_removes_lock_file(): void
     {
-        $lock = new TunnelLock(300);
+        $lock = new TunnelLock('300');
         $lock->acquire();
         $lockPath = $this->lockDir().'/tunnel-300.lock';
 
@@ -162,7 +162,7 @@ final class TunnelLockTest extends TestCase
 
     public function test_release_is_safe_when_not_acquired(): void
     {
-        $lock = new TunnelLock(301);
+        $lock = new TunnelLock('301');
         // Should not throw
         $lock->release();
         $this->assertTrue(true);

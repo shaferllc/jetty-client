@@ -30,7 +30,7 @@ final class EdgeAgentIntegrationTest extends TestCase
 
     private const AGENT_TOKEN = 'test-agent-token-abc123';
 
-    private const TUNNEL_ID = 42;
+    private const TUNNEL_ID = '01JTEST00000000000000TUNNEL';
 
     /** @var resource|null PHP built-in server process */
     private $upstreamProc = null;

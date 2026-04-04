@@ -27,14 +27,14 @@ final class TelegramNotifier
     public static function shareStarted(array $context): void
     {
         $url = (string) ($context['public_url'] ?? '');
-        $id = (int) ($context['tunnel_id'] ?? 0);
+        $id = (string) ($context['tunnel_id'] ?? '');
         $local = (string) ($context['local_target'] ?? '');
         $printOnly = ! empty($context['print_url_only']);
 
         $title = $printOnly ? '<b>jetty</b> tunnel created (print-url-only)' : '<b>jetty share</b> started';
         $lines = [
             $title,
-            'Tunnel id: <code>'.self::e((string) $id).'</code>',
+            'Tunnel id: <code>'.self::e($id).'</code>',
             'URL: '.self::e($url),
         ];
         if ($local !== '') {
@@ -50,14 +50,14 @@ final class TelegramNotifier
     public static function shareFailed(string $phase, \Throwable|string $error, array $context = []): void
     {
         $msg = $error instanceof \Throwable ? $error->getMessage() : $error;
-        $id = (int) ($context['tunnel_id'] ?? 0);
+        $id = (string) ($context['tunnel_id'] ?? '');
         $lines = [
             '<b>jetty share</b> failed',
             'Phase: <code>'.self::e($phase).'</code>',
             'Error: '.self::e($msg),
         ];
-        if ($id > 0) {
-            $lines[] = 'Tunnel id: <code>'.self::e((string) $id).'</code>';
+        if ($id !== '') {
+            $lines[] = 'Tunnel id: <code>'.self::e($id).'</code>';
         }
         if (($context['public_url'] ?? '') !== '') {
             $lines[] = 'URL: '.self::e((string) $context['public_url']);
@@ -66,7 +66,7 @@ final class TelegramNotifier
         self::sendHtml(implode("\n", $lines));
     }
 
-    public static function edgeAgentFailed(int $tunnelId, string $publicUrl, string $detail): void
+    public static function edgeAgentFailed(string $tunnelId, string $publicUrl, string $detail): void
     {
         $lines = [
             '<b>jetty share</b> edge agent failed early',
@@ -78,7 +78,7 @@ final class TelegramNotifier
         self::sendHtml(implode("\n", $lines));
     }
 
-    public static function shareEnded(int $tunnelId, string $publicUrl, string $reason): void
+    public static function shareEnded(string $tunnelId, string $publicUrl, string $reason): void
     {
         $lines = [
             '<b>jetty share</b> ended',
@@ -90,7 +90,7 @@ final class TelegramNotifier
         self::sendHtml(implode("\n", $lines));
     }
 
-    public static function tunnelDeleteFailed(int $tunnelId, string $detail): void
+    public static function tunnelDeleteFailed(string $tunnelId, string $detail): void
     {
         $lines = [
             '<b>jetty share</b> tunnel delete failed',

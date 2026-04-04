@@ -24,7 +24,7 @@ final class TunnelLock
     private mixed $lockHandle = null;
 
     public function __construct(
-        private readonly int $tunnelId,
+        private readonly string $tunnelId,
     ) {
         $this->lockPath = self::lockDir().'/tunnel-'.$tunnelId.'.lock';
     }

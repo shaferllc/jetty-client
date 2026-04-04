@@ -50,7 +50,7 @@ final class ApiClient
      *
      * @return array<string, mixed>
      */
-    public function attachTunnel(int $tunnelId, string $localHost, int $localPort, ?string $tunnelServer = null): array
+    public function attachTunnel(string $tunnelId, string $localHost, int $localPort, ?string $tunnelServer = null): array
     {
         $body = [
             'local_host' => $localHost,
@@ -111,7 +111,7 @@ final class ApiClient
         ];
     }
 
-    public function deleteTunnel(int $id): void
+    public function deleteTunnel(string $id): void
     {
         $res = $this->request('DELETE', '/api/tunnels/'.$id, null);
 
@@ -123,7 +123,7 @@ final class ApiClient
     /**
      * @param  array{requests?: int, bytes_in?: int, bytes_out?: int}  $trafficDeltas
      */
-    public function heartbeat(int $id, array $trafficDeltas = []): void
+    public function heartbeat(string $id, array $trafficDeltas = []): void
     {
         $body = null;
         $filtered = array_filter($trafficDeltas, fn ($v) => $v > 0);
@@ -141,7 +141,7 @@ final class ApiClient
     /**
      * @param  array<string, mixed>  $sample
      */
-    public function postRequestSample(int $tunnelId, array $sample): void
+    public function postRequestSample(string $tunnelId, array $sample): void
     {
         $body = [
             'method' => $sample['method'] ?? 'GET',
@@ -163,7 +163,7 @@ final class ApiClient
     /**
      * @return array<string, mixed>
      */
-    public function getRequestSample(int $sampleId): array
+    public function getRequestSample(string $sampleId): array
     {
         $res = $this->request('GET', '/api/tunnel-request-samples/'.$sampleId, null);
 

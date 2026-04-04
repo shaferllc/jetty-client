@@ -1148,8 +1148,8 @@ final class Application
         if ($args === []) {
             throw new \InvalidArgumentException('Usage: jetty delete <tunnel-id>');
         }
-        $id = (int) $args[0];
-        if ($id < 1) {
+        $id = trim($args[0]);
+        if ($id === '') {
             throw new \InvalidArgumentException('Invalid tunnel id');
         }
 
@@ -2094,7 +2094,7 @@ final class Application
 
             $publicUrl = (string) ($data['public_url'] ?? '');
             $localTarget = (string) ($data['local_target'] ?? '');
-            $id = (int) ($data['id'] ?? 0);
+            $id = (string) ($data['id'] ?? '');
 
             $tunnelLock = new TunnelLock($id);
             $lockStatus = $tunnelLock->check();
@@ -2500,7 +2500,7 @@ final class Application
     /**
      * @return bool True if the tunnel was removed automatically (idle policy); caller should not delete again.
      */
-    private function runShareHeartbeatLoop(ApiClient $client, int $tunnelId, string $publicUrl, bool $verbose, bool $deleteOnExit, int $shareStartedAt): bool
+    private function runShareHeartbeatLoop(ApiClient $client, string $tunnelId, string $publicUrl, bool $verbose, bool $deleteOnExit, int $shareStartedAt): bool
     {
         $idleCfg = ShareIdleConfig::fromEnvironment();
         $idleDisabled = $idleCfg->disabled;
@@ -2658,7 +2658,7 @@ final class Application
         return false;
     }
 
-    private function shareIdlePromptMessage(int $tunnelId, string $publicUrl, int $promptAfterMinutes, int $graceMinutes): string
+    private function shareIdlePromptMessage(string $tunnelId, string $publicUrl, int $promptAfterMinutes, int $graceMinutes): string
     {
         $urlLine = $publicUrl !== '' ? "Public URL: {$publicUrl}\n" : '';
 

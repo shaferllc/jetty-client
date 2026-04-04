@@ -136,7 +136,7 @@ final class TunnelResumeMatcher
             return $candidates[0];
         }
 
-        usort($candidates, fn ($a, $b): int => ((int) ($b['id'] ?? 0)) <=> ((int) ($a['id'] ?? 0)));
+        usort($candidates, fn ($a, $b): int => ((string) ($b['id'] ?? '')) <=> ((string) ($a['id'] ?? '')));
 
         return $candidates[0];
     }
