@@ -77,6 +77,10 @@ final class HelpRenderer
                 'jetty share [port]',
                 'Public HTTPS URL → your local app (alias: http)',
             ],
+            [
+                'jetty stack <slug>',
+                'Start every tunnel in a stack template (Bridge Crew → Workspace)',
+            ],
             ['jetty list [--long|-l]', 'List tunnels for your account'],
             ['jetty delete <id>', 'Remove a tunnel'],
             ['jetty replay <sample-id>', 'Replay a captured request locally'],
@@ -203,6 +207,7 @@ final class HelpRenderer
           jetty share [port] [--host=127.0.0.1] [--server=us-west-1] [--site=HOST] [--subdomain=label] [--print-url-only] [--skip-edge] [--serve[=DIR]] [--no-detect] [--no-resume] [--force|-f] [--delete-on-exit] [--no-body-rewrite] [--no-js-rewrite] [--no-css-rewrite] [--verbose|-v|--errors] [--debug-agent]
             (alias: http)  Auto-detect local dev upstream from cwd (see jetty help --advanced), or --serve for a static PHP server
             --server= tunnel/edge id; default from config.  --site= / --host= upstream host (default 127.0.0.1)
+          jetty stack <slug>   Start every tunnel in a template from Bridge (Crew → Workspace); parallel on macOS & Linux, command list on Windows
 
         Install: composer require jetty/client  (or: composer global require jetty/client — put Composer's global vendor/bin on PATH)
           Same config (~/.config/jetty/config.json) for PHAR and Composer. Releases: one "Release CLI" workflow ships the PHAR on GitHub and the same version to Packagist — bump once, not twice.

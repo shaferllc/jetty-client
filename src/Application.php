@@ -83,6 +83,7 @@ final class Application
                 'domains' => $this->cmdDomains($global, $rest),
                 'delete' => $this->cmdDelete($global, $rest),
                 'share', 'http' => $this->cmdShare($global, $rest),
+                'stack' => $this->cmdStack($global, $rest),
                 'login' => $this->cmdLogin($global, $rest),
                 'onboard' => $this->cmdOnboard($global, $rest),
                 'setup' => $this->cmdSetup($global, $rest),
@@ -1077,6 +1078,15 @@ final class Application
             $this->client($global),
             $this->resolvedConfig($global),
             $global,
+        ))->execute($args);
+    }
+
+    private function cmdStack(array $global, array $args): int
+    {
+        return (new Commands\StackCommand(
+            $this->ui(),
+            $this->client($global),
+            $this->resolvedConfig($global),
         ))->execute($args);
     }
 

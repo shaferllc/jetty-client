@@ -833,6 +833,28 @@ final class EdgeAgent
                                 (string) ($req['body_b64'] ?? ''),
                             );
                             self::recordTraffic($reqBodyLen, strlen($outJson));
+                            $latencyMs = (int) round(microtime(true) * 1000) - (int) ($requestStartMs ?? 0);
+                            if ($latencyMs < 0) {
+                                $latencyMs = 0;
+                            }
+                            async(function () use (
+                                $apiClient,
+                                $heartbeatTunnelId,
+                                $method,
+                                $path,
+                                $respStatus,
+                                $latencyMs,
+                            ): void {
+                                try {
+                                    $apiClient->postRequestLog($heartbeatTunnelId, [
+                                        'method' => $method,
+                                        'path' => $path,
+                                        'status' => $respStatus,
+                                        'latency_ms' => $latencyMs,
+                                    ]);
+                                } catch (\Throwable) {
+                                }
+                            })->ignore();
                             if (
                                 ($handled['sample'] ?? null) !== null &&
                                 self::captureSamplesEnabled()

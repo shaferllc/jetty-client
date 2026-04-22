@@ -86,7 +86,7 @@ final class SetupWizard
             if ($line === '2') {
                 self::runTokenOnly(Config::resolve($configFlag), $configFlag);
 
-                return;
+                continue;
             }
             if ($line === '3') {
                 return;
@@ -122,9 +122,24 @@ final class SetupWizard
 
     private static function runTokenOnly(Config $start, ?string $configFlag): void
     {
-        $base = rtrim(Config::resolve($configFlag)->apiUrl, '/');
-        $choice = self::promptTokenAuthChoice($start->token, $base !== '', true);
-        self::applyTokenAuthChoice($choice, $base, $start->token, true, false);
+        $ui = CliUi::default();
+        while (true) {
+            $start = Config::resolve($configFlag);
+            $base = rtrim($start->apiUrl, '/');
+            $choice = self::promptTokenAuthChoice($start->token, $base !== '', true);
+            if ($choice === 'skip') {
+                self::applyTokenAuthChoice($choice, $base, $start->token, true, false);
+
+                return;
+            }
+            self::applyTokenAuthChoice($choice, $base, $start->token, true, false);
+            $ui->out('');
+            if ($choice === 'browser') {
+                $ui->out($ui->green('You are logged in. Token saved.'));
+            } else {
+                $ui->out($ui->green('Token saved.'));
+            }
+        }
     }
 
     /**

@@ -6,7 +6,7 @@ namespace JettyCli;
 
 final class ApiClient
 {
-    public const VERSION = '0.1.60';
+    public const VERSION = '0.1.61';
 
     /** Default GitHub owner/repo for PHAR `jetty update` / `self-update` when JETTY_*_REPO env is unset (matches Bridge config/jetty.php cli_github_repo). */
     public const DEFAULT_PHAR_RELEASES_REPO = 'shaferllc/jetty';
@@ -166,6 +166,27 @@ final class ApiClient
 
         if (! in_array($res['status'], [200, 201], true)) {
             throw new \RuntimeException('request sample: HTTP '.$res['status'].': '.$res['body']);
+        }
+    }
+
+    /**
+     * Lightweight request log (status + latency only; no bodies).
+     *
+     * @param  array{status: int, latency_ms: int, method: string, path: string}  $row
+     */
+    public function postRequestLog(string $tunnelId, array $row): void
+    {
+        $body = [
+            'method' => $row['method'] ?? 'GET',
+            'path' => $row['path'] ?? '/',
+            'status' => (int) ($row['status'] ?? 502),
+            'latency_ms' => (int) ($row['latency_ms'] ?? 0),
+        ];
+        $payload = json_encode($body, JSON_THROW_ON_ERROR);
+        $res = $this->request('POST', '/api/tunnels/'.$tunnelId.'/request-log', $payload);
+
+        if (! in_array($res['status'], [200, 201], true)) {
+            throw new \RuntimeException('request log: HTTP '.$res['status'].': '.$res['body']);
         }
     }
 
@@ -387,6 +408,58 @@ final class ApiClient
      * Anonymous telemetry when the edge WebSocket handshake fails (e.g. nginx 502). Fire-and-forget; never throws.
      * Opt out with JETTY_SHARE_TELEMETRY=0.
      */
+    /**
+     * @return list<array<string, mixed>>
+     */
+    public function listTunnelStackTemplates(): array
+    {
+        $res = $this->request('GET', '/api/tunnel-stack-templates', null);
+
+        if ($res['status'] === 402) {
+            throw new \RuntimeException(
+                'Tunnel stack templates require Captain or Fleet. Upgrade this crew on the Bridge under Billing.',
+            );
+        }
+        if ($res['status'] !== 200) {
+            throw new \RuntimeException(
+                'list tunnel stack templates: HTTP '.$res['status'].': '.$res['body'],
+            );
+        }
+        $json = json_decode($res['body'], true, flags: JSON_THROW_ON_ERROR);
+        $data = $json['data'] ?? [];
+
+        return is_array($data) ? $data : [];
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    public function getTunnelStackTemplateBySlug(string $slug): array
+    {
+        $q = http_build_query(['slug' => $slug], '', '&', PHP_QUERY_RFC3986);
+        $res = $this->request('GET', '/api/tunnel-stack-templates?'.$q, null);
+
+        if ($res['status'] === 402) {
+            throw new \RuntimeException(
+                'Tunnel stack templates require Captain or Fleet. Upgrade this crew on the Bridge under Billing.',
+            );
+        }
+        if ($res['status'] === 404) {
+            throw new \RuntimeException('No stack template with slug: '.$slug);
+        }
+        if ($res['status'] !== 200) {
+            throw new \RuntimeException(
+                'get tunnel stack template: HTTP '.$res['status'].': '.$res['body'],
+            );
+        }
+        $json = json_decode($res['body'], true, flags: JSON_THROW_ON_ERROR);
+        if (! is_array($json) || ! is_array($json['data'] ?? null)) {
+            throw new \RuntimeException('Invalid API response for tunnel stack template');
+        }
+
+        return $json['data'];
+    }
+
     public function postEdgeWsFailureTelemetry(int $httpStatus, ?string $reason = null): void
     {
         if (getenv('JETTY_SHARE_TELEMETRY') === '0') {
