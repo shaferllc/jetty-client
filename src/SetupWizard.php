@@ -122,25 +122,103 @@ final class SetupWizard
 
     private static function runTokenOnly(Config $start, ?string $configFlag): void
     {
-        self::outRaw('Paste API token (Bridge → Tokens), or press Enter to sign in in your browser ['.self::maskToken($start->token).']: ');
-        $line = self::readLine();
-        if ($line === false) {
+        $base = rtrim(Config::resolve($configFlag)->apiUrl, '/');
+        $choice = self::promptTokenAuthChoice($start->token, $base !== '', true);
+        self::applyTokenAuthChoice($choice, $base, $start->token, true, false);
+    }
+
+    /**
+     * @return 'paste'|'browser'|'skip'
+     */
+    private static function promptTokenAuthChoice(string $existingTokenRaw, bool $hasApiBase, bool $allowSkip): string
+    {
+        $ui = CliUi::default();
+        $hasExisting = trim($existingTokenRaw) !== '';
+
+        while (true) {
+            $ui->out('');
+            $ui->out('How do you want to set your API token?');
+            $ui->out('  '.$ui->bold($ui->cyan('1')).'  Paste token (Bridge → Tokens)');
+            $ui->out('  '.$ui->bold($ui->cyan('2')).'  Open browser to sign in');
+            if ($allowSkip) {
+                $third = $hasExisting
+                    ? 'Skip — keep current token ['.self::maskToken($existingTokenRaw).']'
+                    : 'Skip — exit without saving a token';
+                $ui->out('  '.$ui->bold($ui->cyan('3')).'  '.$third);
+            }
+
+            if ($allowSkip && $hasExisting) {
+                $default = '3';
+            } elseif ($hasApiBase) {
+                $default = '2';
+            } else {
+                $default = '1';
+            }
+
+            $ui->outRaw($ui->dim('Choice ['.$default.']: '));
+            $line = self::readLine();
+            if ($line === false) {
+                throw new \InvalidArgumentException('cancelled');
+            }
+            $line = trim($line);
+            if ($line === '') {
+                $line = $default;
+            }
+            if ($line === '1') {
+                return 'paste';
+            }
+            if ($line === '2') {
+                return 'browser';
+            }
+            if ($line === '3' && $allowSkip) {
+                return 'skip';
+            }
+            $ui->warnLine($allowSkip ? 'Please enter 1, 2, or 3.' : 'Please enter 1 or 2.');
+        }
+    }
+
+    /**
+     * @param  'paste'|'browser'|'skip'  $choice
+     */
+    private static function applyTokenAuthChoice(string $choice, string $apiBase, string $previousToken, bool $isTokenOnlyMenu, bool $requireToken): void
+    {
+        if ($choice === 'skip') {
+            if (trim($previousToken) !== '') {
+                self::out('Token unchanged.');
+            } else {
+                self::out('No token saved.');
+            }
+
+            return;
+        }
+        if ($choice === 'browser') {
+            if ($apiBase === '') {
+                throw new \InvalidArgumentException(
+                    $isTokenOnlyMenu
+                        ? 'Run Bridge & server first (setup option 1), or paste a token (option 1).'
+                        : 'Paste a token, or run onboarding first (jetty onboard / jetty setup).'
+                );
+            }
+            self::out('Browser sign-in…');
+            $tok = self::waitForBrowserToken($apiBase);
+            Config::writeUserConfigMerged(['token' => $tok]);
+
+            return;
+        }
+
+        self::outRaw('Paste token: ');
+        $paste = self::readLine();
+        if ($paste === false) {
             throw new \InvalidArgumentException('cancelled');
         }
-        $tok = trim($line);
+        $tok = trim($paste);
         if ($tok === '') {
-            if (trim($start->token) === '') {
-                $base = rtrim(Config::resolve($configFlag)->apiUrl, '/');
-                if ($base === '') {
-                    throw new \InvalidArgumentException('Run Bridge & server first (option 1), or paste a token.');
-                }
-                self::out('Browser sign-in…');
-                $tok = self::waitForBrowserToken($base);
-                Config::writeUserConfigMerged(['token' => $tok]);
-
-                return;
+            if ($requireToken) {
+                throw new \InvalidArgumentException(
+                    'A token is required for onboarding. Paste a non-empty token or choose browser sign-in (2).'
+                );
             }
-            self::out('Token unchanged.');
+            self::out('Empty token — nothing saved.');
 
             return;
         }
@@ -369,30 +447,9 @@ final class SetupWizard
         }
 
         $base = rtrim(Config::resolve($configFlag, $region)->apiUrl, '/');
-        $hint = '(required — paste token or press Enter for browser)';
-        if (! $requireToken && $existing !== '') {
-            $hint = '['.self::maskToken($existing).' to keep, or Enter for browser]';
-        }
-        self::out('');
-        self::outRaw('API token (Bridge → Tokens) '.$hint.': ');
-        $line = self::readLine();
-        if ($line === false) {
-            throw new \InvalidArgumentException('cancelled');
-        }
-        $tok = trim($line);
-        if ($tok === '') {
-            if (! $requireToken && $existing !== '') {
-                self::out('Token unchanged.');
-
-                return;
-            }
-            if ($base === '') {
-                throw new \InvalidArgumentException('Paste a token, or run onboarding first (jetty onboard / jetty setup).');
-            }
-            self::out('Browser sign-in…');
-            $tok = self::waitForBrowserToken($base);
-        }
-        Config::writeUserConfigMerged(['token' => $tok]);
+        $allowSkip = ! $requireToken;
+        $choice = self::promptTokenAuthChoice($start->token, $base !== '', $allowSkip);
+        self::applyTokenAuthChoice($choice, $base, $start->token, false, $requireToken);
     }
 
     private static function trimmedEnv(string $name): ?string
