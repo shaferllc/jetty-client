@@ -51,7 +51,7 @@ final class Application
                 if (trim($cfg->token) === '') {
                     try {
                         SetupWizard::runOnboarding(
-                            $global['config'],
+                            $global['config'] ?? null,
                             $global['region'] ?? null,
                         );
                     } catch (\Throwable $e) {
@@ -236,18 +236,31 @@ final class Application
     }
 
     /**
-     * @param  array{api-url: ?string, token: ?string, config: ?string, region: ?string}  $global
+     * @return array{api-url: ?string, token: ?string, config: ?string, region: ?string}
+     */
+    private function defaultGlobalState(): array
+    {
+        return [
+            'api-url' => null,
+            'token' => null,
+            'config' => null,
+            'region' => null,
+        ];
+    }
+
+    /**
+     * @param  array{api-url?: ?string, token?: ?string, config?: ?string, region?: ?string}  $global
      */
     private function resolvedConfig(array $global): Config
     {
         return Config::resolve(
-            $global['config'],
+            $global['config'] ?? null,
             $global['region'] ?? null,
-        )->merge($global['api-url'], $global['token']);
+        )->merge($global['api-url'] ?? null, $global['token'] ?? null);
     }
 
     /**
-     * @param  array{api-url: ?string, token: ?string, config: ?string, region: ?string}  $global
+     * @param  array{api-url?: ?string, token?: ?string, config?: ?string, region?: ?string}  $global
      */
     private function client(array $global): ApiClient
     {
@@ -433,12 +446,12 @@ final class Application
      */
     private function cmdSelfUpdate(array $args): int
     {
-        return (new Commands\UpdateCommand($this->ui(), $this->resolvedConfig([])))->executeSelfUpdate($args);
+        return (new Commands\UpdateCommand($this->ui(), $this->resolvedConfig($this->defaultGlobalState())))->executeSelfUpdate($args);
     }
 
     private function cmdInstallClient(array $args): int
     {
-        return (new Commands\UpdateCommand($this->ui(), $this->resolvedConfig([])))->executeInstallClient($args);
+        return (new Commands\UpdateCommand($this->ui(), $this->resolvedConfig($this->defaultGlobalState())))->executeInstallClient($args);
     }
 
     /**
@@ -496,9 +509,7 @@ final class Application
 
     private function updateCommand(): Commands\UpdateCommand
     {
-        $defaults = ['api-url' => null, 'token' => null, 'config' => null, 'region' => null];
-
-        return new Commands\UpdateCommand($this->ui(), $this->resolvedConfig($defaults));
+        return new Commands\UpdateCommand($this->ui(), $this->resolvedConfig($this->defaultGlobalState()));
     }
 
     /**
@@ -1066,9 +1077,9 @@ final class Application
 
     private function cmdDoctor(): int
     {
-        $defaults = ['api-url' => null, 'token' => null, 'config' => null, 'region' => null];
+        $empty = $this->defaultGlobalState();
 
-        return (new Commands\DoctorCommand($this->ui(), $this->client($defaults), $this->resolvedConfig($defaults)))->execute();
+        return (new Commands\DoctorCommand($this->ui(), $this->client($empty), $this->resolvedConfig($empty)))->execute();
     }
 
     private function cmdShare(array $global, array $args): int
