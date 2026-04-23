@@ -97,41 +97,47 @@ final class DoctorCommand
         );
         $u->out('  '.$u->dim('Version:  ').'v'.$current);
 
-        try {
-            $repo = $this->releasesRepo();
-            $token = $this->githubTokenForReleases();
-            $latest = GitHubPharRelease::latest($repo, $token);
-            if ($latest !== null) {
-                $latestTag = (string) ($latest['tag_name'] ?? '');
-                $latestSemver = GitHubPharRelease::tagToSemver($latestTag);
-                if ($latestSemver !== '' && $latestTag !== '') {
-                    $u->out('  '.$u->dim('On GitHub: ').'v'.$latestSemver);
-
-                    if (version_compare($latestSemver, $current, '>')) {
-                        $u->out('');
-                        $u->warnLine(
-                            'Update available on GitHub — run: '.$u->cmd('jetty update'),
-                        );
-                    } else {
-                        $u->out('');
-                        $u->successLine('Matches or newer than the latest published CLI.');
-                    }
-                } else {
-                    $u->out('  '.$u->dim('On GitHub:  ').$u->dim('could not parse a version from releases'));
-                }
-            } else {
-                $u->out(
-                    '  '.
-                        $u->dim('On GitHub:  ').
-                        $u->dim('could not determine (no matching release, rate limit, or no network)'),
-                );
-            }
-        } catch (\Throwable) {
+        $githubSemver = $this->tryResolveGithubLatestSemver();
+        $serverCli = $this->fetchServerCliFromBootstrap();
+        if ($githubSemver !== null) {
+            $u->out('  '.$u->dim('On GitHub: ').'v'.$githubSemver);
+        } else {
             $u->out(
                 '  '.
                     $u->dim('On GitHub:  ').
-                    $u->dim('could not check (network or API error)'),
+                    $u->dim('unavailable (rate limit, no matching release, or network)'),
             );
+        }
+
+        if ($serverCli['ok'] === 'missing') {
+            $u->out('  '.$u->dim('On server:  ').$u->dim('(no API URL; run: '.$u->cmd('jetty setup').')'));
+        } elseif ($serverCli['ok'] === 'ok') {
+            $u->out('  '.$u->dim('On server:  ').'v'.$serverCli['version']);
+        } else {
+            $u->out(
+                '  '.
+                    $u->dim('On server:  ').
+                    $u->dim('(could not read '.$u->cmd('GET /api/cli/bootstrap').' — check API URL and connectivity)'),
+            );
+        }
+
+        $ref = $githubSemver ?? ($serverCli['ok'] === 'ok' ? $serverCli['version'] : null);
+        if ($ref === null) {
+            $u->out('');
+            $u->warnLine('Could not compare to a published or server version — check GitHub and your Bridge.');
+        } elseif (version_compare($ref, $current, '>')) {
+            $u->out('');
+            $u->warnLine('Update available — run: '.$u->cmd('jetty update'));
+            if ($githubSemver === null && $serverCli['ok'] === 'ok') {
+                $u->out('  '.$u->dim('(using recommended version from your Bridge; GitHub not checked)'));
+            }
+        } else {
+            $u->out('');
+            if ($githubSemver !== null) {
+                $u->successLine('Up to date with the latest published CLI (GitHub).');
+            } else {
+                $u->successLine('Up to date with the version your Bridge recommends.');
+            }
         }
 
         // -- 3. Offer to clean other installs --
@@ -591,6 +597,77 @@ final class DoctorCommand
         }
 
         return $best;
+    }
+
+    /**
+     * Best-effort: latest semver from GitHub PHAR releases (null if unavailable).
+     */
+    private function tryResolveGithubLatestSemver(): ?string
+    {
+        try {
+            $repo = $this->releasesRepo();
+            $token = $this->githubTokenForReleases();
+            $latest = GitHubPharRelease::latest($repo, $token);
+            if ($latest === null) {
+                return null;
+            }
+            $latestTag = (string) ($latest['tag_name'] ?? '');
+            if ($latestTag === '') {
+                return null;
+            }
+            $raw = GitHubPharRelease::tagToSemver($latestTag);
+
+            return $this->normalizeComparableSemver($raw);
+        } catch (\Throwable) {
+            return null;
+        }
+    }
+
+    /**
+     * @return array{ok: 'missing'}|array{ok: 'error'}|array{ok: 'ok', version: string}
+     */
+    private function fetchServerCliFromBootstrap(): array
+    {
+        $apiUrl = $this->config->apiUrl;
+        if (! is_string($apiUrl) || $apiUrl === '') {
+            return ['ok' => 'missing'];
+        }
+        try {
+            $client = new ApiClient($apiUrl, '');
+            $res = $client->request('GET', '/api/cli/bootstrap', null);
+            if ($res['status'] !== 200) {
+                return ['ok' => 'error'];
+            }
+            $json = json_decode($res['body'], true, 512, JSON_THROW_ON_ERROR);
+            if (! is_array($json)) {
+                return ['ok' => 'error'];
+            }
+            $v = (string) ($json['cli_version'] ?? '');
+            $norm = $this->normalizeComparableSemver($v);
+            if ($norm === null) {
+                return ['ok' => 'error'];
+            }
+
+            return ['ok' => 'ok', 'version' => $norm];
+        } catch (\Throwable) {
+            return ['ok' => 'error'];
+        }
+    }
+
+    /**
+     * Parse to x.y.z for version_compare, or null if not parseable.
+     */
+    private function normalizeComparableSemver(string $raw): ?string
+    {
+        $t = ltrim(trim($raw), 'vV');
+        if ($t === '') {
+            return null;
+        }
+        if (preg_match('/^(\d+\.\d+\.\d+)/', $t, $m) === 1) {
+            return $m[1];
+        }
+
+        return null;
     }
 
     private function resolveRunningBinaryPath(): string
