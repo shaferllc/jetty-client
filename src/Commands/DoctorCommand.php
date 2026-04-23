@@ -37,12 +37,14 @@ final class DoctorCommand
             return 1;
         }
 
+        $this->sortInstallsForDisplay($installs, $thisPath);
+
         $primary = null;
         $duplicates = [];
 
         foreach ($installs as $install) {
-            $isCurrent = $install['path'] === $thisPath;
-            $marker = $isCurrent ? $u->green(' ← active') : '';
+            $isCurrent = $this->installPathIsThisProcess($install['path'], $thisPath);
+            $marker = $isCurrent ? $u->green(' ← active (this `jetty` run)') : '';
 
             $versionStr =
                 $install['version'] !== ''
@@ -68,41 +70,67 @@ final class DoctorCommand
                 count($installs).
                     ' installs found. Multiple copies can cause version mismatches.',
             );
+            if ($higher = $this->highestProbedVersionAmongInstalls($installs)) {
+                if (version_compare($higher, $current, '>')) {
+                    $u->out('');
+                    $u->warnLine(
+                        'A newer copy (v'.
+                            $higher.
+                            ') is on disk, but this process is v'.
+                            $current.
+                            '. Reorder '.
+                            $u->cmd('PATH').
+                            ' so that directory is before older installs, or remove the old copy, then open a new shell.',
+                    );
+                }
+            }
         }
 
         // -- 2. Version check --
         $u->out('');
         $u->section('Version');
 
-        $latestTag = null;
+        $u->out(
+            '  '.
+                $u->dim('This run: ').
+                ($thisPath !== '' ? $thisPath : $u->dim('(path unknown)')),
+        );
+        $u->out('  '.$u->dim('Version:  ').'v'.$current);
+
         try {
             $repo = $this->releasesRepo();
             $token = $this->githubTokenForReleases();
             $latest = GitHubPharRelease::latest($repo, $token);
             if ($latest !== null) {
-                $latestTag = $latest['tag_name'];
+                $latestTag = (string) ($latest['tag_name'] ?? '');
                 $latestSemver = GitHubPharRelease::tagToSemver($latestTag);
-                $cmp = version_compare($latestSemver, $current);
+                if ($latestSemver !== '' && $latestTag !== '') {
+                    $u->out('  '.$u->dim('On GitHub: ').'v'.$latestSemver);
 
-                $u->out('  '.$u->dim('Current:  ').'v'.$current);
-                $u->out('  '.$u->dim('Latest:   ').'v'.$latestSemver);
-
-                if ($cmp > 0) {
-                    $u->out('');
-                    $u->warnLine(
-                        'Update available — run: '.$u->cmd('jetty update'),
-                    );
+                    if (version_compare($latestSemver, $current, '>')) {
+                        $u->out('');
+                        $u->warnLine(
+                            'Update available on GitHub — run: '.$u->cmd('jetty update'),
+                        );
+                    } else {
+                        $u->out('');
+                        $u->successLine('Matches or newer than the latest published CLI.');
+                    }
                 } else {
-                    $u->out('');
-                    $u->successLine('Up to date.');
+                    $u->out('  '.$u->dim('On GitHub:  ').$u->dim('could not parse a version from releases'));
                 }
+            } else {
+                $u->out(
+                    '  '.
+                        $u->dim('On GitHub:  ').
+                        $u->dim('could not determine (no matching release, rate limit, or no network)'),
+                );
             }
         } catch (\Throwable) {
-            $u->out('  '.$u->dim('Current:  ').'v'.$current);
             $u->out(
                 '  '.
-                    $u->dim('Latest:   ').
-                    $u->dim('could not check (network error)'),
+                    $u->dim('On GitHub:  ').
+                    $u->dim('could not check (network or API error)'),
             );
         }
 
@@ -111,7 +139,27 @@ final class DoctorCommand
             $u->out('');
             $u->section('Cleanup');
 
-            // Number each non-active install for selection
+            if ($primary !== null) {
+                $pv =
+                    $primary['version'] !== ''
+                        ? 'v'.$primary['version']
+                        : 'unknown';
+                $u->out('  Running process (stays on disk while this command runs; remove others first if cleaning up):');
+                $u->out('    '.$u->green('·').' '.$primary['path']);
+                $u->out(
+                    '        '.$pv.
+                        '  '.
+                        $u->dim('('.$primary['type'].')'),
+                );
+                $u->out('');
+            } else {
+                $u->warnLine(
+                    'Could not match the running binary to a scanned path — be careful which copies you remove.',
+                );
+                $u->out('');
+            }
+
+            $u->out('  Other installed copies (pick numbers to remove, or "none")');
             $numbered = array_values($duplicates);
             foreach ($numbered as $i => $dup) {
                 $num = $i + 1;
@@ -132,8 +180,14 @@ final class DoctorCommand
                 );
             }
             $u->out('');
+            $u->out(
+                '  '.$u->dim('To switch which copy your shell uses, put the right directory first in ').
+                    $u->cmd('PATH').
+                    $u->dim(' and open a new terminal.'),
+            );
+            $u->out('');
             $u->errRaw(
-                '  Remove which? Enter numbers (e.g. 1,3), "all", or "none": ',
+                '  Remove which? Enter numbers (e.g. 1,2), "all" (all listed above), or "none": ',
             );
             $answer = strtolower(trim((string) fgets(\STDIN)));
 
@@ -462,7 +516,7 @@ final class DoctorCommand
     private function probeJettyVersion(string $path): string
     {
         // If it is the currently running binary, use our constant.
-        if ($path === $this->resolveRunningBinaryPath()) {
+        if ($this->installPathIsThisProcess($path, $this->resolveRunningBinaryPath())) {
             return ApiClient::VERSION;
         }
 
@@ -483,6 +537,60 @@ final class DoctorCommand
         }
 
         return '';
+    }
+
+    /**
+     * @param  list<array{path: string, version: string, type: string}>  $installs
+     */
+    private function sortInstallsForDisplay(array &$installs, string $thisPath): void
+    {
+        usort(
+            $installs,
+            function (array $a, array $b) use ($thisPath): int {
+                $aActive = $this->installPathIsThisProcess($a['path'], $thisPath);
+                $bActive = $this->installPathIsThisProcess($b['path'], $thisPath);
+                if ($aActive !== $bActive) {
+                    return $aActive ? -1 : 1;
+                }
+
+                return strcmp($a['path'], $b['path']);
+            },
+        );
+    }
+
+    private function installPathIsThisProcess(string $installPath, string $thisPath): bool
+    {
+        if ($thisPath === '' || $installPath === '') {
+            return false;
+        }
+        if ($installPath === $thisPath) {
+            return true;
+        }
+        $rp1 = @realpath($installPath) ?: $installPath;
+        $rp2 = @realpath($thisPath) ?: $thisPath;
+
+        return $rp1 === $rp2;
+    }
+
+    /**
+     * Highest probed x.y.z string among all installs, or null if none probed.
+     *
+     * @param  list<array{path: string, version: string, type: string}>  $installs
+     */
+    private function highestProbedVersionAmongInstalls(array $installs): ?string
+    {
+        $best = null;
+        foreach ($installs as $install) {
+            $v = $install['version'] ?? '';
+            if ($v === '' || ! preg_match('/^\d+\.\d+\.\d+$/', (string) $v)) {
+                continue;
+            }
+            if ($best === null || version_compare((string) $v, $best, '>')) {
+                $best = (string) $v;
+            }
+        }
+
+        return $best;
     }
 
     private function resolveRunningBinaryPath(): string
