@@ -249,6 +249,28 @@ final class ShareCommand
 
                 continue;
             }
+            // --hostname= / --domain= are aliases of --subdomain= for the
+            // custom-domain case where the value is a full hostname (e.g.
+            // tunnel.example.com), not a label on the shared tunnel host.
+            // The CLI treats them identically; the alias just makes the
+            // share command read correctly when copied from the dashboard.
+            if (str_starts_with($arg, '--hostname=') || str_starts_with($arg, '--domain=')) {
+                $flag = str_starts_with($arg, '--hostname=') ? '--hostname' : '--domain';
+                $value = substr($arg, strlen($flag.'='));
+                if ($value === '') {
+                    throw new \InvalidArgumentException(
+                        $flag.'= requires a value',
+                    );
+                }
+                if ($subdomain !== null) {
+                    throw new \InvalidArgumentException(
+                        'pass only one of --subdomain, --hostname, or --domain',
+                    );
+                }
+                $subdomain = $value;
+
+                continue;
+            }
             // --expires=30m or --expires=3600 (seconds)
             if (str_starts_with($arg, '--expires=')) {
                 $expiresRaw = substr($arg, strlen('--expires='));
@@ -1798,7 +1820,7 @@ final class ShareCommand
 
     private function shareUsageSummary(): string
     {
-        return 'Usage: jetty share [port] [--host=127.0.0.1] [--server=us-west-1] [--site=HOST] [--subdomain=label] [--print-url-only] [--skip-edge] [--serve[=DIR]] [--no-detect] [--no-resume] [--force|-f] [--health-path=PATH] [--no-health-check] [--delete-on-exit] [--no-body-rewrite] [--no-js-rewrite] [--no-css-rewrite] [--verbose|-v|--errors] [--debug-agent] (alias: http)';
+        return 'Usage: jetty share [port] [--host=127.0.0.1] [--server=us-west-1] [--site=HOST] [--subdomain=label | --hostname=DOMAIN] [--print-url-only] [--skip-edge] [--serve[=DIR]] [--no-detect] [--no-resume] [--force|-f] [--health-path=PATH] [--no-health-check] [--delete-on-exit] [--no-body-rewrite] [--no-js-rewrite] [--no-css-rewrite] [--verbose|-v|--errors] [--debug-agent] (alias: http)';
     }
 
     private function shareUsageHelp(): string

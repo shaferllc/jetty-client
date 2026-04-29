@@ -204,7 +204,7 @@ final class HelpRenderer
           jetty domains [--json]   Reserved subdomain labels for your team (from Domains in the app)
           jetty delete <id>
           jetty config set|get|clear|wizard ...
-          jetty share [port] [--host=127.0.0.1] [--server=us-west-1] [--site=HOST] [--subdomain=label] [--print-url-only] [--skip-edge] [--serve[=DIR]] [--no-detect] [--no-resume] [--force|-f] [--delete-on-exit] [--no-body-rewrite] [--no-js-rewrite] [--no-css-rewrite] [--verbose|-v|--errors] [--debug-agent]
+          jetty share [port] [--host=127.0.0.1] [--server=us-west-1] [--site=HOST] [--subdomain=label | --hostname=DOMAIN] [--print-url-only] [--skip-edge] [--serve[=DIR]] [--no-detect] [--no-resume] [--force|-f] [--delete-on-exit] [--no-body-rewrite] [--no-js-rewrite] [--no-css-rewrite] [--verbose|-v|--errors] [--debug-agent]
             (alias: http)  Auto-detect local dev upstream from cwd (see jetty help --advanced), or --serve for a static PHP server
             --server= tunnel/edge id; default from config.  --site= / --host= upstream host (default 127.0.0.1)
           jetty stack <slug>   Start every tunnel in a template from Bridge (Crew → Workspace); parallel on macOS & Linux, command list on Windows

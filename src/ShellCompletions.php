@@ -34,7 +34,7 @@ _jetty_completions() {
 
     case "$cmd" in
         share|http)
-            local share_flags="--site= --subdomain= --server= --host= --bind= --local= --local-host= --serve= --route= --routes-file= --expires= --health-path= --print-url-only --skip-edge --edge --no-body-rewrite --no-js-rewrite --no-css-rewrite --no-resume --force --no-health-check --delete-on-exit --no-detect -v -f"
+            local share_flags="--site= --subdomain= --hostname= --domain= --server= --host= --bind= --local= --local-host= --serve= --route= --routes-file= --expires= --health-path= --print-url-only --skip-edge --edge --no-body-rewrite --no-js-rewrite --no-css-rewrite --no-resume --force --no-health-check --delete-on-exit --no-detect -v -f"
             COMPREPLY=( $(compgen -W "$share_flags" -- "$cur") )
             ;;
         config)
@@ -95,7 +95,9 @@ _jetty() {
                 share|http)
                     _arguments \
                         '--site=[Local hostname]:hostname:' \
-                        '--subdomain=[Requested subdomain]:label:' \
+                        '--subdomain=[Requested subdomain label]:label:' \
+                        '--hostname=[Custom domain hostname]:hostname:' \
+                        '--domain=[Alias of --hostname]:hostname:' \
                         '--server=[Tunnel server]:server:' \
                         '--route=[Routing rule /path=port]:rule:' \
                         '--routes-file=[Routes JSON file]:file:_files' \
@@ -157,6 +159,8 @@ complete -c jetty -n '__fish_use_subcommand' -a 'completions' -d 'Generate shell
 # share flags
 complete -c jetty -n '__fish_seen_subcommand_from share http' -l 'site' -d 'Local hostname (e.g. mysite.test)' -r
 complete -c jetty -n '__fish_seen_subcommand_from share http' -l 'subdomain' -d 'Requested subdomain label' -r
+complete -c jetty -n '__fish_seen_subcommand_from share http' -l 'hostname' -d 'Custom domain hostname' -r
+complete -c jetty -n '__fish_seen_subcommand_from share http' -l 'domain' -d 'Alias of --hostname' -r
 complete -c jetty -n '__fish_seen_subcommand_from share http' -l 'server' -d 'Tunnel server name' -r
 complete -c jetty -n '__fish_seen_subcommand_from share http' -l 'route' -d 'Routing rule (/path=port)' -r
 complete -c jetty -n '__fish_seen_subcommand_from share http' -l 'routes-file' -d 'Load routes from JSON file' -r -F
