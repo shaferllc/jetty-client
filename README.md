@@ -33,7 +33,7 @@ composer run jetty -- share 8000 --verbose
 php bin/jetty share 8000 --no-js-rewrite
 ```
 
-**Use this checkout inside another app** (path repository) so `jetty` runs your working tree:
+**Use this checkout while developing the CLI itself** (path repository) so `jetty` runs your working tree:
 
 ```json
 "repositories": [
@@ -44,47 +44,35 @@ php bin/jetty share 8000 --no-js-rewrite
 }
 ```
 
-Then `composer update jetty/client` and use `vendor/bin/jetty` from that app.
+Then `composer update jetty/client` and use `vendor/bin/jetty` from that app for **development only**. End users install via the PHAR — see below.
 
-## Install
+## Install (PHAR — only supported path)
 
 ```bash
-composer require jetty/client
+curl -fsSL "https://usejetty.online/install/jetty.sh" | bash
 ```
 
-The binary is **`vendor/bin/jetty`** (add `vendor/bin` to your PATH, or call it by full path).
+The PHAR is placed at `~/.local/bin/jetty`. `jetty update` replaces that file in place (override the path with `JETTY_PHAR_PATH`).
 
 ```bash
-vendor/bin/jetty version
-```
-
-### Global install
-
-```bash
-composer global require jetty/client
-# Put Composer’s global vendor/bin on your PATH (e.g. ~/.composer/vendor/bin or ~/.config/composer/vendor/bin)
 jetty version
 ```
 
-The `bin/jetty` launcher resolves **`vendor/autoload.php`** from the Composer project root, so the same package works as a **project dependency** or a **global** install.
+### Embedding `jetty/client` as a project library (optional)
 
-### Add the client to a project (from a global `jetty`)
-
-If you already have `jetty` on your PATH from `composer global require`, `cd` to an app that has a `composer.json` and run:
+If you want the **PHP package** in your app (e.g. to call `ApiClient` from your code), install it as a dev dependency:
 
 ```bash
-jetty install-client
+composer require --dev jetty/client
 ```
 
-That runs `composer require jetty/client` in the current directory so you get **`vendor/bin/jetty`** there too (optional; you can keep using the global binary).
+The `jetty install-client` command does the same from inside a project. This embeds the *library*; it is **not** a way to install the CLI. Continue using the system `jetty` binary (PHAR) for `jetty share`, `jetty update`, etc.
 
-### Updating: PHAR, Packagist, and “three installs”
+### Releases
 
-You do **not** need to track three separate release processes:
-
-- **Maintainers:** In this monorepo, **Actions → Release CLI** builds **`jetty-php.phar`**, attaches it to a **`cli-v*`** GitHub Release, and (when configured) **git subtree push** + tag **`vX.Y.Z`** to the **`jetty-client`** mirror so **Packagist** gets the same **`jetty/client`** version. Bump **`ApiClient::VERSION`** and **`composer.json`** `version` in `jetty-client/` together when you cut a release.
-- **Users:** Use **one** primary binary — PHAR in `~/.local/bin`, **or** Composer global, **or** `vendor/bin/jetty` in a project. Your config file is shared (`~/.config/jetty/config.json`). **`jetty update`** only updates **whichever install is running** (PHAR → GitHub release asset; Composer → `composer update jetty/client` in that project root).
-- **Inspect:** `jetty version --install` shows how this binary was installed and what `jetty update` will do. `jetty version --check-update` checks GitHub (PHAR) or Packagist via Composer (project/global).
+- **Maintainers:** In this monorepo, **Actions → Release CLI** builds **`jetty-php.phar`** and attaches it to a **`cli-v*`** GitHub Release. Bump **`ApiClient::VERSION`** when you cut a release.
+- **Users:** Run `jetty update`. It downloads the latest release PHAR and replaces the binary in place.
+- **Inspect:** `jetty version --install` shows the PHAR path. `jetty version --check-update` checks GitHub for a newer release.
 
 ## Configuration
 
@@ -232,7 +220,7 @@ Prebuilt **`jetty-php.phar`** (Box output filename) is attached to **`cli-v*`** 
 
 **PHAR install:** `jetty update` downloads **`jetty-php.phar`** from the latest matching GitHub Release (same as before). **`jetty self-update`** is an alias.
 
-**Composer install:** `jetty update` runs **`composer update jetty/client --no-interaction`** in the **app** that contains `vendor/jetty/client` (resolved by walking up from **current working directory** so path-repository / symlink installs update **your** `composer.lock`, not the package source tree). Requires **`composer`** on `PATH` or **`COMPOSER_BINARY`**. **`--check`** runs `composer outdated jetty/client` (or `composer show --self --latest` when you are developing this repo as the root package). **`--force`** adds **`--no-cache`** and **`--with-all-dependencies`** to Composer (refreshes transitive deps, e.g. amphp). Run **`jetty update` from the app root** (or a subdirectory) so cwd can reach the project with `vendor/jetty/client`.
+When the running binary is **not** a PHAR (e.g. you are running `vendor/bin/jetty` from a Composer dev clone), `jetty update` falls back to updating the PHAR at `~/.local/bin/jetty` (or `JETTY_PHAR_PATH`) if present, or exits with a "reinstall via install.sh" message. Composer is not a supported install path for the CLI.
 
 **Update hint in the console:** After other successful commands (not `jetty update` / `version` / `help`), the CLI may print **`jetty: update available (cli-v…) — run: jetty update`** when GitHub has a newer release than your binary. Checks are **cached** (~24h) in **`~/.config/jetty/update-notice.json`**; a new release is announced right away; the same release is reminded at most once per 24h. Disable with **`JETTY_SKIP_UPDATE_NOTICE=1`**. Skipped when **`JETTY_LOCAL_PHAR_URL`** is set (PHAR dev installs).
 
@@ -245,10 +233,10 @@ Prebuilt **`jetty-php.phar`** (Box output filename) is attached to **`cli-v*`** 
 ```bash
 # PHAR — only if releases live somewhere other than shaferllc/jetty:
 export JETTY_CLI_GITHUB_REPO=your-org/jetty
-jetty version --check-update   # PHAR: GitHub; Composer: outdated / show --self (same as jetty update --check)
-jetty update --check           # PHAR: compare to GitHub; Composer: outdated / show --self
-jetty update                   # PHAR: replace file; Composer: composer update jetty/client
-jetty update --force           # PHAR: re-download; Composer: composer update --no-cache --with-all-dependencies
+jetty version --check-update   # check GitHub for a newer release (same as jetty update --check)
+jetty update --check           # check without downloading
+jetty update                   # download the latest PHAR and replace ~/.local/bin/jetty
+jetty update --force           # re-download even if the version matches
 ```
 
 Bump **`ApiClient::VERSION`** in `src/ApiClient.php` when you tag a release so the PHAR update path can compare versions (release tags use `cli-v1.2.3` → compared as `1.2.3`).
@@ -268,7 +256,7 @@ cd jetty-client && composer install && composer test
 
 ## Replacing `jetty/php-cli`
 
-This package **`replace`s** the legacy name `jetty/php-cli`. Prefer `composer require jetty/client`.
+This package **`replace`s** the legacy name `jetty/php-cli` for project-library use cases.
 
 ## License
 

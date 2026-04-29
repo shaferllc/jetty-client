@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace JettyCli\Commands;
 
-use Composer\InstalledVersions;
 use JettyCli\ApiClient;
 use JettyCli\CliUi;
 use JettyCli\Config;
@@ -28,7 +27,60 @@ final class UpdateCommand
             return $this->updatePharInPlace($args, $pharPath);
         }
 
-        return $this->updateComposerJettyClient($args);
+        // Not running from a PHAR (e.g. invoked via a Composer dev clone or
+        // vendor/bin wrapper). The supported install path is the PHAR placed
+        // by install.sh, so update that on disk if we can find it.
+        $installedPhar = self::findInstalledPhar();
+        if ($installedPhar !== null) {
+            $this->stderr(
+                'Updating PHAR at '.$installedPhar.' (the running binary is not a PHAR).',
+            );
+
+            return $this->updatePharInPlace($args, $installedPhar);
+        }
+
+        $this->stderr(
+            'jetty update: this is not a PHAR install. The CLI is distributed as a PHAR via install.sh — Composer is not a supported install path.',
+        );
+        $this->stderr('');
+        $this->stderr('Reinstall:');
+        $this->stderr('  curl -sSf https://usejetty.online/install.sh | sh');
+        $this->stderr('');
+        $this->stderr('Override the PHAR path with JETTY_PHAR_PATH if you installed it somewhere other than ~/.local/bin/jetty.');
+
+        return 1;
+    }
+
+    /**
+     * Locate the PHAR installed by install.sh. Returns the first existing
+     * candidate, or null if none are found.
+     */
+    private static function findInstalledPhar(): ?string
+    {
+        $candidates = [];
+
+        $envOverride = getenv('JETTY_PHAR_PATH');
+        if (is_string($envOverride) && trim($envOverride) !== '') {
+            $candidates[] = trim($envOverride);
+        }
+
+        $home = getenv('HOME');
+        if (! is_string($home) || $home === '') {
+            $home = (string) ($_SERVER['HOME'] ?? '');
+        }
+        if ($home !== '') {
+            $candidates[] = $home.\DIRECTORY_SEPARATOR.'.local'.\DIRECTORY_SEPARATOR.'bin'.\DIRECTORY_SEPARATOR.'jetty';
+        }
+
+        $candidates[] = \DIRECTORY_SEPARATOR.'usr'.\DIRECTORY_SEPARATOR.'local'.\DIRECTORY_SEPARATOR.'bin'.\DIRECTORY_SEPARATOR.'jetty';
+
+        foreach ($candidates as $path) {
+            if (is_file($path) && is_readable($path)) {
+                return $path;
+            }
+        }
+
+        return null;
     }
 
     /**
@@ -312,108 +364,6 @@ final class UpdateCommand
         );
     }
 
-    /**
-     * @param  list<string>  $args
-     */
-    public function updateComposerJettyClient(array $args): int
-    {
-        if (! class_exists(InstalledVersions::class)) {
-            throw new \RuntimeException(
-                'jetty update: Composer metadata not loaded. Use the PHAR install, or run `composer update jetty/client` from your project.',
-            );
-        }
-        if (! InstalledVersions::isInstalled('jetty/client')) {
-            throw new \RuntimeException(
-                'jetty update: package jetty/client is not installed via Composer. Use the PHAR, or run: composer require jetty/client',
-            );
-        }
-
-        $root = self::composerProjectRootForJettyClient();
-        $composer = self::resolveComposerBinary();
-
-        $checkOnly = in_array('--check', $args, true);
-        $force = in_array('--force', $args, true);
-
-        if ($checkOnly) {
-            $this->stdout('Install: Composer (project: '.$root.')');
-            $this->stdout('Client version in this run: '.ApiClient::VERSION);
-            $rootPackage = InstalledVersions::getRootPackage();
-            if (($rootPackage['name'] ?? '') === 'jetty/client') {
-                self::runComposerInDirectory($root, $composer, [
-                    'show',
-                    '--self',
-                    '--latest',
-                    '--no-ansi',
-                ]);
-            } else {
-                self::runComposerInDirectory($root, $composer, [
-                    'outdated',
-                    'jetty/client',
-                    '--direct',
-                    '--no-ansi',
-                ]);
-            }
-
-            return 0;
-        }
-
-        if (
-            ! $force &&
-            ($rootPackage = InstalledVersions::getRootPackage()) &&
-            ($rootPackage['name'] ?? '') !== 'jetty/client'
-        ) {
-            $outdatedJson = self::composerCaptureStdout($root, $composer, [
-                'outdated',
-                'jetty/client',
-                '--direct',
-                '--format=json',
-            ]);
-            if (is_string($outdatedJson)) {
-                $outdatedJson = trim($outdatedJson);
-                $decoded = json_decode($outdatedJson, true);
-                if (is_array($decoded) && $decoded === []) {
-                    $pretty = InstalledVersions::getPrettyVersion(
-                        'jetty/client',
-                    );
-                    $this->stdout(
-                        'You\'re already on the latest jetty/client for this project ('.
-                            $pretty.
-                            '). No update needed. Use --force to run composer update with --no-cache.',
-                    );
-
-                    return 0;
-                }
-            }
-        }
-
-        $cmd = ['update', 'jetty/client', '--no-interaction'];
-        if ($force) {
-            $cmd[] = '--no-cache';
-            $cmd[] = '--with-all-dependencies';
-        }
-
-        $code = self::runComposerInDirectory($root, $composer, $cmd);
-        if ($code !== 0) {
-            throw new \RuntimeException(
-                'composer '.
-                    implode(' ', $cmd).
-                    ' failed (exit '.
-                    $code.
-                    '). Run it manually from: '.
-                    $root,
-            );
-        }
-
-        $this->stdout(
-            'Updated jetty/client via Composer in '.
-                $root.
-                '. Run jetty version to confirm.',
-        );
-        $this->emitPostUpdateConfigTip();
-
-        return 0;
-    }
-
     public function releasesRepo(): string
     {
         foreach (
@@ -454,10 +404,10 @@ final class UpdateCommand
         }
 
         return "\n\n".
-            'This build of jetty/client is too old for `jetty '.
+            'This build of jetty is too old for `jetty '.
             $command.
             '`. '.
-            'Upgrade: reinstall the PHAR from your Jetty install URL or GitHub Releases, run `jetty self-update` if your PHAR supports it, or `composer update jetty/client`. '.
+            'Upgrade: reinstall the PHAR via `curl -sSf https://usejetty.online/install.sh | sh`, or run `jetty update` from a current PHAR. '.
             'You can configure this version with `jetty config set api-url …` and `jetty config set token …`.';
     }
 
@@ -469,149 +419,6 @@ final class UpdateCommand
     private function stderr(string $s): void
     {
         fwrite(\STDERR, $s.\PHP_EOL);
-    }
-
-    /**
-     * @param  list<string>  $composerArgs
-     */
-    private static function composerCaptureStdout(
-        string $root,
-        string $composer,
-        array $composerArgs,
-    ): ?string {
-        $nullDevice = \PHP_OS_FAMILY === 'Windows' ? 'NUL' : '/dev/null';
-        $command = array_merge([$composer], $composerArgs);
-        $proc = @proc_open(
-            $command,
-            [
-                0 => ['file', $nullDevice, 'r'],
-                1 => ['pipe', 'w'],
-                2 => ['pipe', 'w'],
-            ],
-            $pipes,
-            $root,
-        );
-        if (! is_resource($proc)) {
-            return null;
-        }
-        $out = stream_get_contents($pipes[1]);
-        fclose($pipes[1]);
-        fclose($pipes[2]);
-        $exitCode = proc_close($proc);
-        if ($exitCode !== 0) {
-            return null;
-        }
-
-        return is_string($out) ? $out : null;
-    }
-
-    /**
-     * Composer project root that owns {@see InstalledVersions} for jetty/client.
-     *
-     * Do not call realpath() on the package path before checking for vendor/jetty/client:
-     * path-repository and symlink installs resolve to the package source dir, so dirname(..,3)
-     * would point at the wrong tree and `composer update jetty/client` would not update the app lock.
-     */
-    private static function composerProjectRootForJettyClient(): string
-    {
-        $raw = InstalledVersions::getInstallPath('jetty/client');
-        if (! is_string($raw) || $raw === '') {
-            throw new \RuntimeException(
-                'Could not resolve jetty/client install path.',
-            );
-        }
-
-        $fromCwd = self::composerProjectRootFromCwd($raw);
-        if ($fromCwd !== null) {
-            return $fromCwd;
-        }
-
-        $norm = str_replace('\\', '/', $raw);
-        if (str_ends_with($norm, '/vendor/jetty/client')) {
-            $root = dirname($raw, 3);
-            $resolved = realpath($root);
-
-            return $resolved !== false ? $resolved : $root;
-        }
-
-        $resolved = realpath($raw);
-        if ($resolved === false) {
-            throw new \RuntimeException(
-                'jetty/client install path is not readable: '.$raw,
-            );
-        }
-
-        $normResolved = str_replace('\\', '/', $resolved);
-        if (str_ends_with($normResolved, '/vendor/jetty/client')) {
-            $root = dirname($resolved, 3);
-            $rootReal = realpath($root);
-
-            return $rootReal !== false ? $rootReal : $root;
-        }
-
-        $dir = $resolved;
-        for ($i = 0; $i < 24; $i++) {
-            if (is_file($dir.\DIRECTORY_SEPARATOR.'composer.json')) {
-                return $dir;
-            }
-            $parent = dirname($dir);
-            if ($parent === $dir) {
-                break;
-            }
-            $dir = $parent;
-        }
-
-        throw new \RuntimeException(
-            'Could not resolve Composer project root for jetty/client (install path: '.
-                $raw.
-                ').',
-        );
-    }
-
-    /**
-     * Prefer the consumer project (directory containing vendor/jetty/client) by walking up from cwd.
-     *
-     * When jetty/client is installed via a path repository, {@see InstalledVersions::getInstallPath()}
-     * often returns the source tree (e.g. .../jetty-client), so Composer would run in the package repo
-     * instead of the app (e.g. beacon) that depends on it — the app lock would not update.
-     */
-    private static function composerProjectRootFromCwd(
-        string $installPath,
-    ): ?string {
-        $cwd = getcwd();
-        if ($cwd === false) {
-            return null;
-        }
-        $resolvedInstall = realpath($installPath);
-        if ($resolvedInstall === false) {
-            return null;
-        }
-        $dir = $cwd;
-        for ($i = 0; $i < 32; $i++) {
-            $vendorJetty =
-                $dir.
-                \DIRECTORY_SEPARATOR.
-                'vendor'.
-                \DIRECTORY_SEPARATOR.
-                'jetty'.
-                \DIRECTORY_SEPARATOR.
-                'client';
-            if (is_dir($vendorJetty)) {
-                $rj = realpath($vendorJetty);
-                if ($rj !== false && $rj === $resolvedInstall) {
-                    $root = realpath($dir);
-
-                    return $root !== false ? $root : $dir;
-                }
-            }
-            $parent = dirname($dir);
-            if ($parent === $dir) {
-                break;
-            }
-            $dir = $parent;
-        }
-
-        return null;
     }
 
     private static function resolveComposerBinary(): string

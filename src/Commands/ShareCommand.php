@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace JettyCli\Commands;
 
-use Composer\InstalledVersions;
 use JettyCli\ApiClient;
 use JettyCli\CliUi;
 use JettyCli\Config;
@@ -93,6 +92,40 @@ final class ShareCommand
                 putenv('JETTY_SHARE_PROJECT_ROOT='.$rp);
             }
         }
+
+        // Project-level defaults from jetty.config.json `share` object. CLI
+        // flags below still override these — see the parsing loop. `hostname`
+        // wins over `subdomain` when both are set in the file (custom domain
+        // is the more specific case).
+        $hostnameFromFile = self::projectShareString($shareFile, 'hostname');
+        $subdomainFromFile = self::projectShareString($shareFile, 'subdomain');
+        if ($hostnameFromFile !== null) {
+            $subdomain = $hostnameFromFile;
+        } elseif ($subdomainFromFile !== null) {
+            $subdomain = $subdomainFromFile;
+        }
+        $localHostFromFile = self::projectShareString($shareFile, 'local_host');
+        if ($localHostFromFile !== null) {
+            $localHost = $localHostFromFile;
+            $upstreamExplicit = true;
+        }
+        $localPortFromFile = self::projectShareInt($shareFile, 'local_port');
+        $healthPathFromFile = self::projectShareString($shareFile, 'health_path');
+        if ($healthPathFromFile !== null) {
+            $healthPath = $healthPathFromFile;
+        }
+        $printUrlOnlyFromFile = filter_var(
+            $shareFile['print_url_only'] ?? false,
+            FILTER_VALIDATE_BOOLEAN,
+        );
+        if ($printUrlOnlyFromFile) {
+            $printUrlOnly = true;
+        }
+        $routingRulesFromFile = self::projectShareRoutingRules($shareFile);
+        if ($routingRulesFromFile !== []) {
+            $routingRules = $routingRulesFromFile;
+        }
+
         $shareDebugAgent = filter_var(
             $shareFile['debug_agent'] ?? false,
             FILTER_VALIDATE_BOOLEAN,
@@ -389,6 +422,11 @@ final class ShareCommand
                 );
             }
             $explicitPort = (int) $rawPort;
+        }
+
+        // Project-config local_port: only used if the user didn't pass a port positionally.
+        if ($explicitPort === null && $localPortFromFile !== null) {
+            $explicitPort = $localPortFromFile;
         }
 
         if ($printUrlOnly && $serveDocroot !== null) {
@@ -1627,13 +1665,6 @@ final class ShareCommand
         if ($pharPath !== '' && $update->localPharUpdateUrl() !== null) {
             $canCheck = false;
         }
-        if (
-            $pharPath === '' &&
-            (! class_exists(InstalledVersions::class) ||
-                ! InstalledVersions::isInstalled('jetty/client'))
-        ) {
-            $canCheck = false;
-        }
 
         $latestTag = null;
         $updateAvailable = false;
@@ -1709,32 +1740,22 @@ final class ShareCommand
             );
             $u->out('');
 
-            $canSelfUpdate =
-                $pharPath !== '' ||
-                (class_exists(InstalledVersions::class) &&
-                    InstalledVersions::isInstalled('jetty/client'));
-            if ($canSelfUpdate) {
-                $u->errRaw('  Update now? [Y/n] ');
-                $answer = trim((string) fgets(\STDIN));
-                if ($answer === '' || strtolower($answer[0]) === 'y') {
-                    $u->err('  Updating…');
-                    try {
-                        if ($pharPath !== '') {
-                            $update->updatePharInPlace([], $pharPath);
-                        } else {
-                            $update->updateComposerJettyClient([]);
-                        }
-                        $u->successLine(
-                            'Updated to v'.
-                                $latestSemver.
-                                '. Run `jetty share` again to use the new version.',
-                        );
+            $u->errRaw('  Update now? [Y/n] ');
+            $answer = trim((string) fgets(\STDIN));
+            if ($answer === '' || strtolower($answer[0]) === 'y') {
+                $u->err('  Updating…');
+                try {
+                    $update->executeSelfUpdate([]);
+                    $u->successLine(
+                        'Updated to v'.
+                            $latestSemver.
+                            '. Run `jetty share` again to use the new version.',
+                    );
 
-                        return true;
-                    } catch (\Throwable $e) {
-                        $u->warnLine('Update failed: '.$e->getMessage());
-                        $u->err('  Continuing with v'.$current.'…');
-                    }
+                    return true;
+                } catch (\Throwable $e) {
+                    $u->warnLine('Update failed: '.$e->getMessage());
+                    $u->err('  Continuing with v'.$current.'…');
                 }
             }
         } elseif ($latestTag !== '') {
@@ -2343,6 +2364,76 @@ final class ShareCommand
         }
 
         return $result;
+    }
+
+    // -- Project-config readers (`jetty.config.json` → `share` object) --
+
+    /**
+     * @param  array<string, mixed>  $shareFile
+     */
+    private static function projectShareString(array $shareFile, string $key): ?string
+    {
+        if (! isset($shareFile[$key]) || ! is_string($shareFile[$key])) {
+            return null;
+        }
+        $v = trim($shareFile[$key]);
+
+        return $v === '' ? null : $v;
+    }
+
+    /**
+     * @param  array<string, mixed>  $shareFile
+     */
+    private static function projectShareInt(array $shareFile, string $key): ?int
+    {
+        if (! isset($shareFile[$key])) {
+            return null;
+        }
+        $raw = $shareFile[$key];
+        if (is_int($raw)) {
+            $n = $raw;
+        } elseif (is_string($raw) && is_numeric($raw) && (string) (int) $raw === trim($raw)) {
+            $n = (int) $raw;
+        } else {
+            return null;
+        }
+        if ($n < 1 || $n > 65535) {
+            return null;
+        }
+
+        return $n;
+    }
+
+    /**
+     * Read `share.routing_rules` and normalize each entry to the internal
+     * routing-rule shape. Each entry should be an object with `path` and
+     * `target` (either `port` or `host:port`).
+     *
+     * @param  array<string, mixed>  $shareFile
+     * @return list<array{match_type: string, path_prefix?: string, local_host: string, local_port: int, enabled: bool}>
+     */
+    private static function projectShareRoutingRules(array $shareFile): array
+    {
+        if (! isset($shareFile['routing_rules']) || ! is_array($shareFile['routing_rules'])) {
+            return [];
+        }
+        $out = [];
+        foreach ($shareFile['routing_rules'] as $rule) {
+            if (! is_array($rule)) {
+                continue;
+            }
+            $path = isset($rule['path']) && is_string($rule['path']) ? trim($rule['path']) : '';
+            $target = isset($rule['target']) && is_string($rule['target']) ? trim($rule['target']) : '';
+            if ($path === '' || $target === '') {
+                continue;
+            }
+            $parsed = self::parseRouteFlag($path.'='.$target);
+            if ($parsed !== null) {
+                $out[] = $parsed;
+            }
+        }
+
+        return $out;
     }
 
     // -- I/O wrappers --

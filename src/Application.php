@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace JettyCli;
 
-use Composer\InstalledVersions;
 use JettyCli\Commands\AuthCommands;
 use JettyCli\Commands\ConfigCommand;
 use JettyCli\Commands\HelpRenderer;
@@ -324,14 +323,9 @@ final class Application
                         );
                     }
                 }
-            } elseif (
-                class_exists(InstalledVersions::class) &&
-                InstalledVersions::isInstalled('jetty/client')
-            ) {
-                return $this->updateComposerJettyClient(['--check']);
             } else {
                 $this->ui()->warnLine(
-                    '--check-update applies to PHAR installs (GitHub) or Composer installs (Packagist).',
+                    '--check-update applies to PHAR installs only. Reinstall via `curl -sSf https://usejetty.online/install.sh | sh`.',
                 );
             }
         }
@@ -365,59 +359,25 @@ final class Application
             return implode("\n", $lines);
         }
 
-        if (
-            class_exists(InstalledVersions::class) &&
-            InstalledVersions::isInstalled('jetty/client')
-        ) {
-            try {
-                $root = self::composerProjectRootForJettyClient();
-            } catch (\Throwable) {
-                return 'Install: Composer (jetty/client) — could not resolve project root.';
+        $lines = [
+            'Install: not a PHAR (this looks like a Composer-installed copy or a dev checkout).',
+            '',
+            'The supported install path is the PHAR placed by install.sh:',
+            '  curl -sSf https://usejetty.online/install.sh | sh',
+            '',
+            'After reinstalling, `jetty update` updates the PHAR at ~/.local/bin/jetty in place.',
+            'Override the path with JETTY_PHAR_PATH if you installed the PHAR somewhere else.',
+        ];
+        $multi = $this->detectMultipleJettyBinariesOnPath();
+        if ($multi !== null) {
+            $lines[] = '';
+            $lines[] = 'Multiple `jetty` executables on PATH:';
+            foreach ($multi as $p) {
+                $lines[] = '  '.$p;
             }
-            $rootPkg = InstalledVersions::getRootPackage()['name'] ?? '';
-            if ($rootPkg === 'jetty/client') {
-                $kind = 'Composer (this repo / jetty-client dev checkout)';
-            } elseif ($this->isComposerGlobalProjectRoot($root)) {
-                $kind = 'Composer global (~/.composer or ~/.config/composer)';
-            } else {
-                $kind = 'Composer project dependency';
-            }
-
-            $lines = [
-                'Install: '.$kind,
-                '  Project root: '.$root,
-                '  Update:       jetty update   (runs composer update jetty/client in that directory)',
-                '',
-                'PHAR releases and Packagist use the same version from one GitHub “Release CLI” workflow —',
-                'you do not bump them separately. Pick one binary (PHAR or Composer) for daily use;',
-                '`jetty update` only upgrades the install that is running.',
-            ];
-            $multi = $this->detectMultipleJettyBinariesOnPath();
-            if ($multi !== null) {
-                $lines[] = '';
-                $lines[] = 'Multiple `jetty` executables on PATH:';
-                foreach ($multi as $p) {
-                    $lines[] = '  '.$p;
-                }
-            }
-
-            return implode("\n", $lines);
         }
 
-        return 'Install: unknown (not a PHAR and jetty/client not in Composer metadata).';
-    }
-
-    private function isComposerGlobalProjectRoot(string $root): bool
-    {
-        $home = getenv('HOME') ?: getenv('USERPROFILE');
-        if (! is_string($home) || $home === '') {
-            return false;
-        }
-        $norm = str_replace('\\', '/', $root);
-        $h = str_replace('\\', '/', $home);
-
-        return str_contains($norm, $h.'/.composer/') ||
-            str_contains($norm, $h.'/.config/composer/');
+        return implode("\n", $lines);
     }
 
     /**
@@ -484,14 +444,6 @@ final class Application
         $this->updateCommand()->emitPostUpdateConfigTip();
     }
 
-    /**
-     * @param  list<string>  $args
-     */
-    private function updateComposerJettyClient(array $args): int
-    {
-        return $this->updateCommand()->updateComposerJettyClient($args);
-    }
-
     private function releasesRepo(): string
     {
         return $this->updateCommand()->releasesRepo();
@@ -512,118 +464,6 @@ final class Application
         return new Commands\UpdateCommand($this->ui(), $this->resolvedConfig($this->defaultGlobalState()));
     }
 
-    /**
-     * Composer project root that owns {@see InstalledVersions} for jetty/client.
-     *
-     * Do not call realpath() on the package path before checking for vendor/jetty/client:
-     * path-repository and symlink installs resolve to the package source dir, so dirname(..,3)
-     * would point at the wrong tree and `composer update jetty/client` would not update the app lock.
-     */
-    private static function composerProjectRootForJettyClient(): string
-    {
-        $raw = InstalledVersions::getInstallPath('jetty/client');
-        if (! is_string($raw) || $raw === '') {
-            throw new \RuntimeException(
-                'Could not resolve jetty/client install path.',
-            );
-        }
-
-        $fromCwd = self::composerProjectRootFromCwd($raw);
-        if ($fromCwd !== null) {
-            return $fromCwd;
-        }
-
-        $norm = str_replace('\\', '/', $raw);
-        if (str_ends_with($norm, '/vendor/jetty/client')) {
-            $root = dirname($raw, 3);
-            $resolved = realpath($root);
-
-            return $resolved !== false ? $resolved : $root;
-        }
-
-        $resolved = realpath($raw);
-        if ($resolved === false) {
-            throw new \RuntimeException(
-                'jetty/client install path is not readable: '.$raw,
-            );
-        }
-
-        $normResolved = str_replace('\\', '/', $resolved);
-        if (str_ends_with($normResolved, '/vendor/jetty/client')) {
-            $root = dirname($resolved, 3);
-            $rootReal = realpath($root);
-
-            return $rootReal !== false ? $rootReal : $root;
-        }
-
-        $dir = $resolved;
-        for ($i = 0; $i < 24; $i++) {
-            if (is_file($dir.\DIRECTORY_SEPARATOR.'composer.json')) {
-                return $dir;
-            }
-            $parent = dirname($dir);
-            if ($parent === $dir) {
-                break;
-            }
-            $dir = $parent;
-        }
-
-        throw new \RuntimeException(
-            'Could not resolve Composer project root for jetty/client (install path: '.
-                $raw.
-                ').',
-        );
-    }
-
-    /**
-     * Prefer the consumer project (directory containing vendor/jetty/client) by walking up from cwd.
-     *
-     * When jetty/client is installed via a path repository, {@see InstalledVersions::getInstallPath()}
-     * often returns the source tree (e.g. …/jetty-client), so Composer would run in the package repo
-     * instead of the app (e.g. beacon) that depends on it — the app lock would not update.
-     */
-    private static function composerProjectRootFromCwd(
-        string $installPath,
-    ): ?string {
-        $cwd = getcwd();
-        if ($cwd === false) {
-            return null;
-        }
-        $resolvedInstall = realpath($installPath);
-        if ($resolvedInstall === false) {
-            return null;
-        }
-        $dir = $cwd;
-        for ($i = 0; $i < 32; $i++) {
-            $vendorJetty =
-                $dir.
-                \DIRECTORY_SEPARATOR.
-                'vendor'.
-                \DIRECTORY_SEPARATOR.
-                'jetty'.
-                \DIRECTORY_SEPARATOR.
-                'client';
-            if (is_dir($vendorJetty)) {
-                $rj = realpath($vendorJetty);
-                if ($rj !== false && $rj === $resolvedInstall) {
-                    $root = realpath($dir);
-
-                    return $root !== false ? $root : $dir;
-                }
-            }
-            $parent = dirname($dir);
-            if ($parent === $dir) {
-                break;
-            }
-            $dir = $parent;
-        }
-
-        return null;
-    }
-
-    /**
-     * @param  list<string>  $rest
-     */
     /**
      * @param  list<string>  $args
      */

@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace JettyCli\Commands;
 
-use Composer\InstalledVersions;
 use JettyCli\ApiClient;
 use JettyCli\CliUi;
 use JettyCli\GitHubPharRelease;
@@ -314,11 +313,10 @@ final class HelpRenderer
             return;
         }
 
-        if (
-            $pharPath === '' &&
-            (! class_exists(InstalledVersions::class) ||
-                ! InstalledVersions::isInstalled('jetty/client'))
-        ) {
+        // Only show the "update available" notice when running from a PHAR.
+        // PHAR is the only supported install path (see CLAUDE.md), so a
+        // non-PHAR run is a Composer dev clone we won't auto-self-update.
+        if ($pharPath === '') {
             return;
         }
 

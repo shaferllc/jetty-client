@@ -312,4 +312,93 @@ final class ConfigTest extends TestCase
         Config::clearUserConfigKey('token');
         $this->assertFileDoesNotExist($this->tmpHome.'/.config/jetty/config.json');
     }
+
+    // ── readProjectShareOverrides() ──
+
+    public function test_read_project_share_returns_empty_when_no_config_file(): void
+    {
+        $dir = $this->tmpHome.'/proj-empty';
+        mkdir($dir, 0700, true);
+        $orig = getcwd();
+        try {
+            chdir($dir);
+            $this->assertSame([], Config::readProjectShareOverrides());
+        } finally {
+            $orig !== false && chdir($orig);
+        }
+    }
+
+    public function test_read_project_share_returns_share_object_from_config_json(): void
+    {
+        $dir = $this->tmpHome.'/proj-with-config';
+        mkdir($dir, 0700, true);
+        file_put_contents(
+            $dir.'/jetty.config.json',
+            json_encode([
+                'share' => [
+                    'hostname' => 'tunnel.example.test',
+                    'subdomain' => 'should-lose',
+                    'local_host' => '127.0.0.2',
+                    'local_port' => 4321,
+                    'health_path' => '/healthz',
+                    'print_url_only' => true,
+                    'routing_rules' => [
+                        ['path' => '/api', 'target' => '8080'],
+                        ['path' => '/static', 'target' => 'static-server:9000'],
+                    ],
+                ],
+            ], JSON_THROW_ON_ERROR),
+        );
+        $orig = getcwd();
+        try {
+            chdir($dir);
+            $share = Config::readProjectShareOverrides();
+            $this->assertSame('tunnel.example.test', $share['hostname'] ?? null);
+            $this->assertSame('should-lose', $share['subdomain'] ?? null);
+            $this->assertSame('127.0.0.2', $share['local_host'] ?? null);
+            $this->assertSame(4321, $share['local_port'] ?? null);
+            $this->assertSame('/healthz', $share['health_path'] ?? null);
+            $this->assertTrue($share['print_url_only'] ?? false);
+            $this->assertIsArray($share['routing_rules'] ?? null);
+            $this->assertCount(2, $share['routing_rules']);
+        } finally {
+            $orig !== false && chdir($orig);
+        }
+    }
+
+    public function test_read_project_share_walks_up_from_subdirectory(): void
+    {
+        $root = $this->tmpHome.'/walk-root';
+        $deep = $root.'/a/b/c';
+        mkdir($deep, 0700, true);
+        file_put_contents(
+            $root.'/jetty.config.json',
+            json_encode(['share' => ['hostname' => 'tunnel.walk.test']], JSON_THROW_ON_ERROR),
+        );
+        $orig = getcwd();
+        try {
+            chdir($deep);
+            $share = Config::readProjectShareOverrides();
+            $this->assertSame('tunnel.walk.test', $share['hostname'] ?? null);
+        } finally {
+            $orig !== false && chdir($orig);
+        }
+    }
+
+    public function test_read_project_share_returns_empty_when_no_share_object(): void
+    {
+        $dir = $this->tmpHome.'/proj-no-share';
+        mkdir($dir, 0700, true);
+        file_put_contents(
+            $dir.'/jetty.config.json',
+            json_encode(['custom_domain' => 'tunnel.test'], JSON_THROW_ON_ERROR),
+        );
+        $orig = getcwd();
+        try {
+            chdir($dir);
+            $this->assertSame([], Config::readProjectShareOverrides());
+        } finally {
+            $orig !== false && chdir($orig);
+        }
+    }
 }
