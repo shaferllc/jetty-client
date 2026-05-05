@@ -590,7 +590,7 @@ final class ShareCommand
                         $tunnelServer,
                     );
                     if ($hit !== null && (int) ($hit['id'] ?? 0) > 0) {
-                        $resumeId = (int) $hit['id'];
+                        $resumeId = (string) $hit['id'];
                     }
                     if ($shareVerbose) {
                         $this->shareVerboseLog(
@@ -598,9 +598,7 @@ final class ShareCommand
                             'resume: list '.
                                 count($listed).
                                 ' tunnel(s); match='.
-                                ($resumeId !== null
-                                    ? (string) $resumeId
-                                    : 'none'),
+                                ($resumeId ?? 'none'),
                         );
                     }
                 } catch (\Throwable $e) {
