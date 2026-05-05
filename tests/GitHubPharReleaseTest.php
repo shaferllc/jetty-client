@@ -19,9 +19,17 @@ final class GitHubPharReleaseTest extends TestCase
         $this->assertSame('1.2.3', GitHubPharRelease::tagToSemver('cli-auto-1.2.3'));
     }
 
-    public function test_tag_to_semver_leaves_v_prefix_unchanged(): void
+    public function test_tag_to_semver_strips_plain_v_prefix(): void
     {
-        $this->assertSame('v1.2.3', GitHubPharRelease::tagToSemver('v1.2.3'));
+        // Public jetty-client mirror uses plain `v` tags (Composer/Packagist
+        // convention). The CLI must compare them as semver alongside cli-v* tags.
+        $this->assertSame('1.2.3', GitHubPharRelease::tagToSemver('v1.2.3'));
+    }
+
+    public function test_tag_to_semver_leaves_v_alone_when_not_followed_by_digit(): void
+    {
+        // Don't strip `v` from words like "version" or "v-something".
+        $this->assertSame('version-1', GitHubPharRelease::tagToSemver('version-1'));
     }
 
     public function test_tag_to_semver_leaves_plain_version_unchanged(): void

@@ -20,8 +20,16 @@ final class GitHubPharRelease
         }
 
         $url = 'https://api.github.com/repos/'.$ownerRepo.'/releases?per_page=100';
-        $json = self::httpGet($url, $githubToken);
+        $status = 0;
+        $json = self::httpGet($url, $githubToken, $status);
         if ($json === null) {
+            if (in_array($status, [401, 403, 404], true)) {
+                $hint = ($githubToken === null || $githubToken === '')
+                    ? ' — the repo may be private. Set JETTY_PHAR_GITHUB_TOKEN to a token with read access, or point JETTY_CLI_GITHUB_REPO at a public mirror.'
+                    : ' — the configured token may lack read access to this repo.';
+                throw new \RuntimeException('GitHub release lookup for '.$ownerRepo.' failed: HTTP '.$status.$hint);
+            }
+
             return null;
         }
 
@@ -61,8 +69,9 @@ final class GitHubPharRelease
         ];
     }
 
-    private static function httpGet(string $url, ?string $token): ?string
+    private static function httpGet(string $url, ?string $token, ?int &$status = null): ?string
     {
+        $status = 0;
         $ch = curl_init($url);
         if ($ch === false) {
             return null;
@@ -84,9 +93,9 @@ final class GitHubPharRelease
         ]);
 
         $body = curl_exec($ch);
-        $code = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $status = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
 
-        if ($body === false || $code < 200 || $code >= 300) {
+        if ($body === false || $status < 200 || $status >= 300) {
             return null;
         }
 
@@ -105,7 +114,7 @@ final class GitHubPharRelease
                 continue;
             }
             $tag = isset($r['tag_name']) ? (string) $r['tag_name'] : '';
-            if ($tag === '' || preg_match('/^cli-v|^cli-auto-/i', $tag) !== 1) {
+            if ($tag === '' || preg_match('/^cli-v|^cli-auto-|^v\d/i', $tag) !== 1) {
                 continue;
             }
             $candidates[] = $r;
@@ -258,12 +267,13 @@ final class GitHubPharRelease
     }
 
     /**
-     * Strip cli-v / cli-auto- prefix for semver compare.
+     * Strip cli-v / cli-auto- / v prefix for semver compare.
      */
     public static function tagToSemver(string $tag): string
     {
         $t = preg_replace('/^cli-v/i', '', $tag) ?? $tag;
         $t = preg_replace('/^cli-auto-/i', '', $t) ?? $t;
+        $t = preg_replace('/^v(?=\d)/i', '', $t) ?? $t;
 
         return $t;
     }
