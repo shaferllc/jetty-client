@@ -1,8 +1,13 @@
 {
     "name": "jetty/client",
-    "description": "Jetty PHP client for the tunnel API (list, delete, share + edge WebSocket agent + heartbeats). Publish this tree as the jetty-client repository; require with Composer: jetty/client.",
+    "description": "Share your localhost over a public HTTPS URL. The Jetty CLI: tunnels, request inspection, and shareable galleries.",
     "type": "library",
     "license": "MIT",
+    "homepage": "https://usejetty.online",
+    "support": {
+        "docs": "https://usejetty.online/docs",
+        "issues": "https://github.com/shaferllc/jetty-client/issues"
+    },
     "keywords": [
         "jetty",
         "tunnel",

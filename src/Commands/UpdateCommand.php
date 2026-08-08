@@ -27,9 +27,9 @@ final class UpdateCommand
             return $this->updatePharInPlace($args, $pharPath);
         }
 
-        // Not running from a PHAR (e.g. invoked via a Composer dev clone or
-        // vendor/bin wrapper). The supported install path is the PHAR placed
-        // by install.sh, so update that on disk if we can find it.
+        // Not running from a PHAR (a cpx run, a Composer dev clone, or a
+        // vendor/bin wrapper). Only the PHAR can be self-updated, so update
+        // that on disk if we can find one.
         $installedPhar = self::findInstalledPhar();
         if ($installedPhar !== null) {
             $this->stderr(
@@ -40,11 +40,15 @@ final class UpdateCommand
         }
 
         $this->stderr(
-            'jetty update: this is not a PHAR install. The CLI is distributed as a PHAR via install.sh — Composer is not a supported install path.',
+            'jetty update: this is not a PHAR install, so there is no binary to replace in place.',
         );
         $this->stderr('');
-        $this->stderr('Reinstall:');
-        $this->stderr('  curl -sSf https://usejetty.online/install.sh | sh');
+        $this->stderr('Running via cpx? cpx owns the version — `jetty update` does not apply.');
+        $this->stderr('Pin or move versions with a Composer constraint instead:');
+        $this->stderr('  cpx jetty/client:^0.1 share 8000');
+        $this->stderr('');
+        $this->stderr('Otherwise install the PHAR, which `jetty update` can upgrade in place:');
+        $this->stderr('  curl -fsSL https://usejetty.online/install/jetty.sh | bash');
         $this->stderr('');
         $this->stderr('Override the PHAR path with JETTY_PHAR_PATH if you installed it somewhere other than ~/.local/bin/jetty.');
 
@@ -407,7 +411,7 @@ final class UpdateCommand
             'This build of jetty is too old for `jetty '.
             $command.
             '`. '.
-            'Upgrade: reinstall the PHAR via `curl -sSf https://usejetty.online/install.sh | sh`, or run `jetty update` from a current PHAR. '.
+            'Upgrade: reinstall the PHAR via `curl -fsSL https://usejetty.online/install/jetty.sh | bash`, run `jetty update` from a current PHAR, or bump the constraint if you run it with cpx. '.
             'You can configure this version with `jetty config set api-url …` and `jetty config set token …`.';
     }
 

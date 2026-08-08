@@ -325,7 +325,8 @@ final class Application
                 }
             } else {
                 $this->ui()->warnLine(
-                    '--check-update applies to PHAR installs only. Reinstall via `curl -sSf https://usejetty.online/install.sh | sh`.',
+                    '--check-update applies to PHAR installs only. Running via cpx? cpx resolves the version itself — pin one with `cpx jetty/client:^0.1`. '.
+                        'Otherwise install the PHAR: `curl -fsSL https://usejetty.online/install/jetty.sh | bash`.',
                 );
             }
         }
@@ -360,12 +361,16 @@ final class Application
         }
 
         $lines = [
-            'Install: not a PHAR (this looks like a Composer-installed copy or a dev checkout).',
+            'Install: not a PHAR (a cpx run, a Composer-installed copy, or a dev checkout).',
             '',
-            'The supported install path is the PHAR placed by install.sh:',
-            '  curl -sSf https://usejetty.online/install.sh | sh',
+            'If you launched this with cpx, that is a supported path — cpx owns the version,',
+            'so `jetty update` does not apply. Pin or move versions with a constraint:',
+            '  cpx jetty/client:^0.1 share 8000',
             '',
-            'After reinstalling, `jetty update` updates the PHAR at ~/.local/bin/jetty in place.',
+            'For a self-contained binary that `jetty update` can upgrade in place, install the PHAR:',
+            '  curl -fsSL https://usejetty.online/install/jetty.sh | bash',
+            '',
+            'After installing, `jetty update` updates the PHAR at ~/.local/bin/jetty in place.',
             'Override the path with JETTY_PHAR_PATH if you installed the PHAR somewhere else.',
         ];
         $multi = $this->detectMultipleJettyBinariesOnPath();

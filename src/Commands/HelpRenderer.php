@@ -208,9 +208,10 @@ final class HelpRenderer
             --server= tunnel/edge id; default from config.  --site= / --host= upstream host (default 127.0.0.1)
           jetty stack <slug>   Start every tunnel in a template from Bridge (Crew → Workspace); parallel on macOS & Linux, command list on Windows
 
-        Install: composer require jetty/client  (or: composer global require jetty/client — put Composer's global vendor/bin on PATH)
-          Same config (~/.config/jetty/config.json) for PHAR and Composer. Releases: one "Release CLI" workflow ships the PHAR on GitHub and the same version to Packagist — bump once, not twice.
-          Day to day: pick one binary (PHAR or Composer); jetty update upgrades the copy you run. Use jetty doctor to find and clean up duplicate installs.
+        Install: curl -fsSL https://usejetty.online/install/jetty.sh | bash   (PHAR — no PHP toolchain or Composer needed)
+          Already use Composer? cpx jetty/client share 8000  (composer global require cpx/cpx first; needs PHP 8.3+)
+          Same config (~/.config/jetty/config.json) whichever way you installed. jetty update upgrades a PHAR in place; under cpx, pin with cpx jetty/client:^0.1 instead.
+          Use jetty doctor to find and clean up duplicate installs.
 
         TXT;
     }
@@ -314,7 +315,7 @@ final class HelpRenderer
         }
 
         // Only show the "update available" notice when running from a PHAR.
-        // PHAR is the only supported install path (see CLAUDE.md), so a
+        // Only a PHAR can self-update (see CLAUDE.md); cpx and dev-clone
         // non-PHAR run is a Composer dev clone we won't auto-self-update.
         if ($pharPath === '') {
             return;

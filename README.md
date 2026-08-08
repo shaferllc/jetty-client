@@ -46,7 +46,7 @@ php bin/jetty share 8000 --no-js-rewrite
 
 Then `composer update jetty/client` and use `vendor/bin/jetty` from that app for **development only**. End users install via the PHAR — see below.
 
-## Install (PHAR — only supported path)
+## Install (PHAR — recommended)
 
 ```bash
 curl -fsSL "https://usejetty.online/install/jetty.sh" | bash
@@ -220,7 +220,7 @@ Prebuilt **`jetty-php.phar`** (Box output filename) is attached to **`cli-v*`** 
 
 **PHAR install:** `jetty update` downloads **`jetty-php.phar`** from the latest matching GitHub Release (same as before). **`jetty self-update`** is an alias.
 
-When the running binary is **not** a PHAR (e.g. you are running `vendor/bin/jetty` from a Composer dev clone), `jetty update` falls back to updating the PHAR at `~/.local/bin/jetty` (or `JETTY_PHAR_PATH`) if present, or exits with a "reinstall via install.sh" message. Composer is not a supported install path for the CLI.
+When the running binary is **not** a PHAR (a `cpx` run, or `vendor/bin/jetty` from a Composer dev clone), `jetty update` falls back to updating the PHAR at `~/.local/bin/jetty` (or `JETTY_PHAR_PATH`) if present. Otherwise it explains the options and exits. Under **cpx** there is nothing to self-update — cpx owns the version, so pin one with `cpx jetty/client:^0.1`.
 
 **Update hint in the console:** After other successful commands (not `jetty update` / `version` / `help`), the CLI may print **`jetty: update available (cli-v…) — run: jetty update`** when GitHub has a newer release than your binary. Checks are **cached** (~24h) in **`~/.config/jetty/update-notice.json`**; a new release is announced right away; the same release is reminded at most once per 24h. Disable with **`JETTY_SKIP_UPDATE_NOTICE=1`**. Skipped when **`JETTY_LOCAL_PHAR_URL`** is set (PHAR dev installs).
 
