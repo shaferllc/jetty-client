@@ -3,8 +3,12 @@
     "description": "Jetty PHP client for the tunnel API (list, delete, share + edge WebSocket agent + heartbeats). Publish this tree as the jetty-client repository; require with Composer: jetty/client.",
     "type": "library",
     "license": "MIT",
-    "keywords": ["jetty", "tunnel", "cli", "api"],
-    "version": "0.1.19",
+    "keywords": [
+        "jetty",
+        "tunnel",
+        "cli",
+        "api"
+    ],
     "require": {
         "php": "^8.2",
         "ext-curl": "*",
