@@ -21,7 +21,7 @@ final class MockTunnelIntegrationTest extends TestCase
 
     private const LOCAL_PORT = 80;
 
-    private const TUNNEL_HOST = 'demo-abc123.tunnels.usejetty.online';
+    private const TUNNEL_HOST = 'demo-abc123.usejetty.online';
 
     protected function setUp(): void
     {

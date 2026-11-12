@@ -135,7 +135,7 @@ The edge WebSocket agent rewrites responses so the **browser stays on `https://{
      After **`TrustProxies`**, **`getSchemeAndHttpHost()`** should be **`https://{tunnel-host}`**.
    - Or in **`AppServiceProvider::boot`**, **`$this->app->booted(fn () => …)`** with the same **`URL::forceRootUrl`** guard — only when **`X-Forwarded-Host`** is present.
 
-3. **`TrustHosts`** / custom host allowlists: allow your **`*.tunnels.usejetty.online`** (or your bridge’s tunnel suffix) if you restrict hosts.
+3. **`TrustHosts`** / custom host allowlists: allow your **`*.usejetty.online`** (or your bridge’s tunnel suffix) if you restrict hosts.
 
 Jetty still rewrites **`Location` / HTML / JS** when the app emits **`beacon.test`** links; fixing Laravel above stops **many** redirects at the source.
 

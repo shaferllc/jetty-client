@@ -26,7 +26,7 @@ final class EdgeAgentIntegrationTest extends TestCase
 {
     private const LOCAL_HOST = '127.0.0.1';
 
-    private const TUNNEL_HOST = 'test-tunnel.tunnels.usejetty.online';
+    private const TUNNEL_HOST = 'test-tunnel.usejetty.online';
 
     private const AGENT_TOKEN = 'test-agent-token-abc123';
 

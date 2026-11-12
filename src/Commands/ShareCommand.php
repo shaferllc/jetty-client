@@ -2113,7 +2113,7 @@ final class ShareCommand
             return $v;
         }
 
-        return 'tunnels.usejetty.online';
+        return 'usejetty.online';
     }
 
     // -- Traffic view methods --

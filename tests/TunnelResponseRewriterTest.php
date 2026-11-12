@@ -23,9 +23,9 @@ final class TunnelResponseRewriterTest extends TestCase
         $out = TunnelResponseRewriter::rewriteAbsoluteUrlToTunnel(
             'https://127.0.0.1:8000/path?q=1#x',
             $lookup,
-            'lbl.tunnels.usejetty.online'
+            'lbl.usejetty.online'
         );
-        $this->assertSame('https://lbl.tunnels.usejetty.online/path?q=1#x', $out);
+        $this->assertSame('https://lbl.usejetty.online/path?q=1#x', $out);
     }
 
     public function test_rewrite_absolute_url_unknown_host_returns_null(): void
@@ -34,7 +34,7 @@ final class TunnelResponseRewriterTest extends TestCase
         $out = TunnelResponseRewriter::rewriteAbsoluteUrlToTunnel(
             'https://evil.example/',
             $lookup,
-            'lbl.tunnels.usejetty.online'
+            'lbl.usejetty.online'
         );
         $this->assertNull($out);
     }
@@ -45,9 +45,9 @@ final class TunnelResponseRewriterTest extends TestCase
         $out = TunnelResponseRewriter::rewriteAbsoluteUrlToTunnel(
             '//beacon.test/dashboard?x=1',
             $lookup,
-            'cove-kfkt2nyd.tunnels.usejetty.online'
+            'cove-kfkt2nyd.usejetty.online'
         );
-        $this->assertSame('https://cove-kfkt2nyd.tunnels.usejetty.online/dashboard?x=1', $out);
+        $this->assertSame('https://cove-kfkt2nyd.usejetty.online/dashboard?x=1', $out);
     }
 
     public function test_rewrite_root_relative_path_not_rewritten(): void
@@ -56,7 +56,7 @@ final class TunnelResponseRewriterTest extends TestCase
         $out = TunnelResponseRewriter::rewriteAbsoluteUrlToTunnel(
             '/dashboard',
             $lookup,
-            'cove-kfkt2nyd.tunnels.usejetty.online'
+            'cove-kfkt2nyd.usejetty.online'
         );
         $this->assertNull($out);
     }
@@ -67,9 +67,9 @@ final class TunnelResponseRewriterTest extends TestCase
         $out = TunnelResponseRewriter::rewriteRefreshHeaderValue(
             '5; url=https://127.0.0.1:8000/dashboard',
             $lookup,
-            'lbl.tunnels.usejetty.online'
+            'lbl.usejetty.online'
         );
-        $this->assertSame('5; url=https://lbl.tunnels.usejetty.online/dashboard', $out);
+        $this->assertSame('5; url=https://lbl.usejetty.online/dashboard', $out);
     }
 
     public function test_redirect_headers_location_and_refresh(): void
@@ -122,11 +122,11 @@ final class TunnelResponseRewriterTest extends TestCase
         $out = TunnelResponseRewriter::maybeRewriteBody(
             $html,
             ['Content-Type' => 'text/html; charset=UTF-8'],
-            ['Host' => 'lbl.tunnels.usejetty.online'],
+            ['Host' => 'lbl.usejetty.online'],
             '127.0.0.1',
             $opts
         );
-        $this->assertStringContainsString('href="https://lbl.tunnels.usejetty.online/page"', $out);
+        $this->assertStringContainsString('href="https://lbl.usejetty.online/page"', $out);
     }
 
     public function test_maybe_rewrite_body_skips_when_body_rewrite_off(): void
@@ -136,7 +136,7 @@ final class TunnelResponseRewriterTest extends TestCase
         $out = TunnelResponseRewriter::maybeRewriteBody(
             $html,
             ['Content-Type' => 'text/html'],
-            ['Host' => 'lbl.tunnels.usejetty.online'],
+            ['Host' => 'lbl.usejetty.online'],
             '127.0.0.1',
             $opts
         );
@@ -150,11 +150,11 @@ final class TunnelResponseRewriterTest extends TestCase
         $out = TunnelResponseRewriter::maybeRewriteBody(
             $html,
             ['Content-Type' => 'text/html'],
-            ['Host' => 'lbl.tunnels.usejetty.online'],
+            ['Host' => 'lbl.usejetty.online'],
             '127.0.0.1',
             $opts
         );
-        $this->assertStringContainsString('"https://lbl.tunnels.usejetty.online/api"', $out);
+        $this->assertStringContainsString('"https://lbl.usejetty.online/api"', $out);
     }
 
     public function test_maybe_rewrite_css_url_in_style(): void
@@ -164,11 +164,11 @@ final class TunnelResponseRewriterTest extends TestCase
         $out = TunnelResponseRewriter::maybeRewriteBody(
             $html,
             ['Content-Type' => 'text/html'],
-            ['Host' => 'lbl.tunnels.usejetty.online'],
+            ['Host' => 'lbl.usejetty.online'],
             '127.0.0.1',
             $opts
         );
-        $this->assertStringContainsString('url(https://lbl.tunnels.usejetty.online/a.png)', $out);
+        $this->assertStringContainsString('url(https://lbl.usejetty.online/a.png)', $out);
     }
 
     public function test_maybe_rewrite_standalone_javascript_mime(): void
@@ -178,11 +178,11 @@ final class TunnelResponseRewriterTest extends TestCase
         $out = TunnelResponseRewriter::maybeRewriteBody(
             $js,
             ['Content-Type' => 'application/javascript'],
-            ['Host' => 'lbl.tunnels.usejetty.online'],
+            ['Host' => 'lbl.usejetty.online'],
             '127.0.0.1',
             $opts
         );
-        $this->assertStringContainsString('"https://lbl.tunnels.usejetty.online/y"', $out);
+        $this->assertStringContainsString('"https://lbl.usejetty.online/y"', $out);
     }
 
     public function test_tunnel_rewrite_host_lookup_includes_rewrite_hosts_env(): void
@@ -553,7 +553,7 @@ final class TunnelResponseRewriterTest extends TestCase
         $out = TunnelResponseRewriter::maybeRewriteBody(
             $html,
             ['Content-Type' => 'text/html'],
-            ['Host' => 'lbl.tunnels.usejetty.online'],
+            ['Host' => 'lbl.usejetty.online'],
             '127.0.0.1',
             $opts
         );
@@ -568,11 +568,11 @@ final class TunnelResponseRewriterTest extends TestCase
         $out = TunnelResponseRewriter::maybeRewriteBody(
             $html,
             ['Content-Type' => 'text/html'],
-            ['Host' => 'lbl.tunnels.usejetty.online'],
+            ['Host' => 'lbl.usejetty.online'],
             '127.0.0.1',
             $opts
         );
-        $this->assertStringContainsString('href="https://lbl.tunnels.usejetty.online/page"', $out);
+        $this->assertStringContainsString('href="https://lbl.usejetty.online/page"', $out);
     }
 
     public function test_emit_debug_ndjson_appends_json_line_when_env_set(): void
