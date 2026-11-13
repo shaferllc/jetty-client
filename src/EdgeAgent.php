@@ -329,15 +329,19 @@ final class EdgeAgent
 
             try {
                 $session = 0;
+                $failedAttempts = 0; // consecutive reconnects without a registration; resets on success
                 while (! $state->userRequestedStop) {
                     $session++;
+                    $failedAttempts++;
                     self::agentEmit($agentDebug, 'session_tick', [
                         'session' => $session,
                         'edge_reconnect' => $edgeReconnect,
                         'user_stop' => $state->userRequestedStop,
                     ]);
                     if ($session > 1 && $edgeReconnect) {
-                        $base = min(60, 2 ** min($session - 2, 6));
+                        // Back off on consecutive failures only: a long-lived share that reconnects after an
+                        // edge deploy starts again at ~1s instead of the 60s cap it reached days ago.
+                        $base = min(60, 2 ** min(max($failedAttempts - 2, 0), 6));
                         $jitter = random_int(0, 750) / 1000.0;
                         $wait = $base + $jitter;
                         self::agentEmit($agentDebug, 'ws_reconnect_backoff', [
@@ -591,6 +595,7 @@ final class EdgeAgent
                         'local_upstream' => $localHost.':'.$localPort,
                         'public_tunnel_host_fallback' => $publicTunnelHostForRewrite,
                     ]);
+                    $failedAttempts = 1;
                     if ($session === 1) {
                         $stderr(
                             'Edge agent connected; forwarding HTTP to local upstream.',
