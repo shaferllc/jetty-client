@@ -438,6 +438,8 @@ final class EdgeAgent
                             'type' => self::TYPE_REGISTER,
                             'tunnel_id' => $tunnelId,
                             'agent_token' => $agentToken,
+                            // Lets the edge set Host to the local site on WebSocket upgrades it pipes as raw TCP.
+                            'upstream_url' => LocalUpstreamUrl::baseForCurl($localHost, $localPort),
                         ],
                         JSON_THROW_ON_ERROR,
                     );
@@ -684,7 +686,7 @@ final class EdgeAgent
                             $ft = self::parseType($raw);
                             // Handle TCP/UDP raw protocol frames
                             if ($ft === self::TYPE_TCP_CONNECT || $ft === self::TYPE_TCP_DATA || $ft === self::TYPE_TCP_CLOSE || $ft === self::TYPE_UDP_DATA) {
-                                self::handleRawProtocolFrame($ft, $raw, $wsConn, $localHost, $localPort, $agentDebug, $v);
+                                self::handleRawProtocolFrame($ft, $raw, $conn, $localHost, $localPort, $agentDebug, $v);
 
                                 continue;
                             }
@@ -1701,7 +1703,7 @@ final class EdgeAgent
         WebsocketConnection $wsConn,
         string $localHost,
         int $localPort,
-        bool $agentDebug,
+        ?callable $agentDebug,
         \Closure $v,
     ): void {
         try {
@@ -1733,11 +1735,15 @@ final class EdgeAgent
     ): void {
         $v("TCP connect: {$connId} -> {$localHost}:{$localPort}");
 
+        // Port 443 is a TLS local site (Valet/Herd), as for HTTP requests; local dev certs aren't verified.
+        $tls = $localPort === 443;
         $sock = @stream_socket_client(
-            "tcp://{$localHost}:{$localPort}",
+            ($tls ? 'tls' : 'tcp')."://{$localHost}:{$localPort}",
             $errno,
             $errstr,
             5,
+            STREAM_CLIENT_CONNECT,
+            stream_context_create($tls ? ['ssl' => ['verify_peer' => false, 'verify_peer_name' => false, 'SNI_enabled' => true, 'peer_name' => $localHost]] : []),
         );
 
         if ($sock === false) {
@@ -1812,9 +1818,19 @@ final class EdgeAgent
             return;
         }
 
-        $written = @fwrite($sock, $data);
-        if ($written === false) {
-            self::handleTcpClose($connId, $v);
+        // Non-blocking socket: fwrite may take only part of a large frame, so keep writing.
+        $deadline = microtime(true) + 10;
+        while ($data !== '') {
+            $written = @fwrite($sock, $data);
+            if ($written === false || microtime(true) > $deadline) {
+                self::handleTcpClose($connId, $v);
+
+                return;
+            }
+            $data = (string) substr($data, $written);
+            if ($data !== '' && $written === 0) {
+                delay(0.005);
+            }
         }
     }
 
