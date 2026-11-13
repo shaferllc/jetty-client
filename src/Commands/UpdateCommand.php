@@ -358,6 +358,14 @@ final class UpdateCommand
             );
         }
 
+        // The running process just replaced its own PHAR. PHP keeps reading it with the old file's
+        // offsets, so loading any further class from it reads garbage (a parse error after a
+        // successful update). Finish here using only built-ins.
+        if ($pharPath !== '' && \Phar::running(false) === realpath($pharPath)) {
+            fwrite(STDERR, "\u{2713} Jetty CLI updated. Run `jetty version` to confirm.\n");
+            exit(0);
+        }
+
         return true;
     }
 
